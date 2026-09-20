@@ -123,13 +123,6 @@
         margin: 0;
         letter-spacing: 0.2px;
       }
-      header h1 .version {
-        font-family: var(--mono);
-        font-size: 10.5px;
-        font-weight: 400;
-        color: var(--text-faint);
-        margin-left: 6px;
-      }
       header p {
         margin: 0;
         font-size: 12px;
@@ -141,11 +134,8 @@
       header .note {
         font-size: 11px;
         color: var(--text-faint);
-        max-width: 300px;
+        max-width: 340px;
         text-align: right;
-      }
-      header button#btnNewProject {
-        flex: 0 0 auto;
       }
 
       .layout {
@@ -462,10 +452,9 @@
   </head>
   <body>
     <header>
-      <h1>LocalCut <span id="versionTag" class="version"></span></h1>
+      <h1>LocalCut</h1>
       <p>frame-accurate video editing, entirely on this device</p>
       <div class="spacer"></div>
-      <button id="btnNewProject" class="danger">New project</button>
       <div class="note">
         Nothing you load here leaves the browser tab. No uploads, no accounts,
         no AI.
@@ -593,9 +582,6 @@
     <script>
       (function () {
         "use strict";
-
-        const VERSION = "1.2.0";
-        document.getElementById("versionTag").textContent = "v" + VERSION;
 
         // ---------- state ----------
         let sources = []; // {id,name,url,video,duration,fps,frameCount,width,height,sizeBytes,locked,thumbCanvas}
@@ -903,26 +889,6 @@
             });
             src._addBtn = addBtn;
             row.appendChild(addBtn);
-
-            const removeBtn = document.createElement("button");
-            removeBtn.textContent = "Remove";
-            removeBtn.className = "danger";
-            removeBtn.title = timeline.some((s) => s.sourceId === src.id)
-              ? "Also removes this clip's segments from the timeline"
-              : "Remove from media pool";
-            removeBtn.addEventListener("click", () => {
-              const inUse = timeline.some((s) => s.sourceId === src.id);
-              if (
-                inUse &&
-                !confirm(
-                  `"${src.name}" is used in the timeline. Remove it and delete those segments too?`,
-                )
-              )
-                return;
-              removeSource(src);
-            });
-            row.appendChild(removeBtn);
-
             meta.appendChild(row);
             poolList.appendChild(card);
             updateCacheProgressUI(src);
@@ -1478,73 +1444,6 @@
           progWrap.classList.remove("active");
           btnExport.disabled = false;
         }
-
-        // ---------- project management ----------
-        function removeSource(source) {
-          // drop any timeline segments that reference this source, and clean up
-          // selection / clipboard entries that would otherwise dangle
-          const removedIds = new Set(
-            timeline.filter((s) => s.sourceId === source.id).map((s) => s.id),
-          );
-          timeline = timeline.filter((s) => s.sourceId !== source.id);
-          selection = selection.filter((id) => !removedIds.has(id));
-          if (clipboard)
-            clipboard = clipboard.filter((t) => t.sourceId !== source.id);
-          if (clipboard && clipboard.length === 0) clipboard = null;
-
-          try {
-            source.video.pause();
-          } catch (e) {}
-          source.video.src = "";
-          try {
-            URL.revokeObjectURL(source.url);
-          } catch (e) {}
-
-          sources = sources.filter((s) => s.id !== source.id);
-
-          renderPool();
-          renderTimeline();
-          refreshResOptions();
-        }
-
-        function newProject() {
-          if (sources.length === 0 && timeline.length === 0) return;
-          const ok = confirm(
-            "Start a new project? This clears every clip in the media pool and the timeline. This cannot be undone.",
-          );
-          if (!ok) return;
-
-          isPlaying = false;
-          playToken++;
-
-          sources.forEach((s) => {
-            try {
-              s.video.pause();
-            } catch (e) {}
-            s.video.src = "";
-            try {
-              URL.revokeObjectURL(s.url);
-            } catch (e) {}
-          });
-
-          sources = [];
-          timeline = [];
-          selection = [];
-          clipboard = null;
-          playhead = 0;
-
-          renderPool();
-          renderTimeline();
-          refreshResOptions();
-          btnPlay.textContent = "▶";
-          exportStatus.textContent = "";
-          progWrap.classList.remove("active");
-          progBar.style.width = "0%";
-        }
-
-        document
-          .getElementById("btnNewProject")
-          .addEventListener("click", newProject);
 
         // ---------- init ----------
         renderTimeline();
