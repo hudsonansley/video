@@ -1,0 +1,1363 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LocalCut — offline frame editor</title>
+    <style>
+      :root {
+        --bg: #151517;
+        --panel: #1c1c1f;
+        --panel-alt: #232327;
+        --border: #302f34;
+        --border-soft: #26262a;
+        --text: #ecebe6;
+        --text-dim: #8c8b92;
+        --text-faint: #5c5b62;
+        --amber: #e3a335;
+        --amber-dim: #5c4a24;
+        --teal: #4fada0;
+        --teal-dim: #25423e;
+        --red: #d1495b;
+        --red-dim: #4a2229;
+        --green: #6fa96b;
+        --green-dim: #28402a;
+        --mono: ui-monospace, "SF Mono", "Cascadia Mono", "Consolas", monospace;
+        --sans: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        --radius: 3px;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        height: 100%;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--sans);
+        font-size: 13px;
+        line-height: 1.45;
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+        overflow: hidden;
+      }
+      button {
+        font-family: var(--sans);
+        font-size: 12px;
+        color: var(--text);
+        background: var(--panel-alt);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 6px 10px;
+        cursor: pointer;
+      }
+      button:hover:not(:disabled) {
+        border-color: var(--text-dim);
+      }
+      button:disabled {
+        opacity: 0.35;
+        cursor: not-allowed;
+      }
+      button.primary {
+        background: var(--amber-dim);
+        border-color: var(--amber);
+        color: var(--amber);
+      }
+      button.primary:hover:not(:disabled) {
+        background: var(--amber);
+        color: #151517;
+      }
+      button.danger {
+        background: var(--red-dim);
+        border-color: var(--red);
+        color: var(--red);
+      }
+      button.danger:hover:not(:disabled) {
+        background: var(--red);
+        color: #151517;
+      }
+      button.good {
+        background: var(--green-dim);
+        border-color: var(--green);
+        color: var(--green);
+      }
+      button.good:hover:not(:disabled) {
+        background: var(--green);
+        color: #151517;
+      }
+      input[type="number"],
+      select {
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--text);
+        background: var(--panel-alt);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 4px 6px;
+        width: 100%;
+      }
+      label.field {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        font-size: 11px;
+        color: var(--text-dim);
+      }
+
+      header {
+        display: flex;
+        align-items: baseline;
+        gap: 12px;
+        padding: 10px 16px;
+        border-bottom: 1px solid var(--border);
+        flex: 0 0 auto;
+        background: var(--panel);
+      }
+      header h1 {
+        font-size: 15px;
+        font-weight: 600;
+        margin: 0;
+        letter-spacing: 0.2px;
+      }
+      header p {
+        margin: 0;
+        font-size: 12px;
+        color: var(--text-dim);
+      }
+      header .spacer {
+        flex: 1;
+      }
+      header .note {
+        font-size: 11px;
+        color: var(--text-faint);
+        max-width: 340px;
+        text-align: right;
+      }
+
+      .layout {
+        flex: 1;
+        display: grid;
+        grid-template-columns: 250px 1fr;
+        min-height: 0;
+      }
+      aside {
+        border-right: 1px solid var(--border);
+        background: var(--panel);
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+      }
+      aside .head {
+        padding: 10px 12px 6px;
+        font-size: 11px;
+        color: var(--text-dim);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      #poolList {
+        flex: 1;
+        overflow-y: auto;
+        padding: 0 10px 10px;
+      }
+      .srcCard {
+        border: 1px solid var(--border-soft);
+        border-radius: var(--radius);
+        background: var(--panel-alt);
+        margin-bottom: 8px;
+        overflow: hidden;
+      }
+      .srcCard .thumbWrap {
+        width: 100%;
+        aspect-ratio: 16/9;
+        background: #000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .srcCard .thumbWrap canvas {
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+      .srcCard .meta {
+        padding: 7px 8px;
+      }
+      .srcCard .name {
+        font-size: 12px;
+        font-weight: 600;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .srcCard .stats {
+        font-family: var(--mono);
+        font-size: 10.5px;
+        color: var(--text-dim);
+        margin-top: 3px;
+      }
+      .srcCard .row {
+        display: flex;
+        gap: 6px;
+        margin-top: 6px;
+        align-items: center;
+      }
+      .srcCard .row select {
+        flex: 0 0 auto;
+        width: auto;
+      }
+      .srcCard .row button {
+        flex: 1;
+      }
+      #dropZone {
+        margin: 10px;
+        padding: 16px 10px;
+        border: 1px dashed var(--border);
+        border-radius: var(--radius);
+        text-align: center;
+        color: var(--text-dim);
+        font-size: 11.5px;
+        cursor: pointer;
+      }
+      #dropZone:hover {
+        border-color: var(--text-dim);
+        color: var(--text);
+      }
+      #fileInput {
+        display: none;
+      }
+
+      main {
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+      }
+
+      #previewSection {
+        flex: 0 0 auto;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 14px 16px 8px;
+        border-bottom: 1px solid var(--border);
+        background: var(--panel);
+      }
+      #previewCanvas {
+        background: #000;
+        max-width: 100%;
+        max-height: 34vh;
+        border: 1px solid var(--border-soft);
+        border-radius: var(--radius);
+      }
+      .transport {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-top: 10px;
+        width: 100%;
+        max-width: 720px;
+      }
+      .transport button {
+        width: 34px;
+        height: 28px;
+      }
+      .transport input[type="range"] {
+        flex: 1;
+        accent-color: var(--amber);
+      }
+      .tc {
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--text-dim);
+        white-space: nowrap;
+      }
+
+      #timelineSection {
+        flex: 1 1 auto;
+        overflow: auto;
+        padding: 12px 16px;
+        min-height: 120px;
+        border-bottom: 1px solid var(--border);
+      }
+      #timelineSection .head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 8px;
+      }
+      #timelineSection .head h2 {
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--text-dim);
+        margin: 0;
+      }
+      #timelineTrack {
+        display: flex;
+        align-items: stretch;
+        gap: 2px;
+        min-height: 64px;
+        padding-bottom: 6px;
+      }
+      .seg {
+        flex: 0 0 auto;
+        min-width: 34px;
+        height: 64px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--panel-alt);
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        padding: 5px 6px;
+        cursor: pointer;
+        overflow: hidden;
+      }
+      .seg:hover {
+        border-color: var(--text-dim);
+      }
+      .seg.selected {
+        border-color: var(--teal);
+        background: var(--teal-dim);
+      }
+      .seg .sname {
+        font-size: 10.5px;
+        font-weight: 600;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .seg .srange {
+        font-family: var(--mono);
+        font-size: 9.5px;
+        color: var(--text-dim);
+      }
+      .seg .rev {
+        position: absolute;
+        top: 3px;
+        right: 4px;
+        font-size: 11px;
+        color: var(--amber);
+      }
+      #timelineEmpty {
+        color: var(--text-faint);
+        font-size: 12px;
+        padding: 20px 0;
+      }
+
+      #inspector {
+        flex: 0 0 auto;
+        padding: 12px 16px 16px;
+        background: var(--panel);
+      }
+      #inspector .head {
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--text-dim);
+        margin-bottom: 8px;
+      }
+      .insGrid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+        gap: 10px;
+        margin-bottom: 10px;
+      }
+      .btnRow {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-bottom: 8px;
+      }
+      #clipStatus {
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--text-dim);
+        margin-top: 4px;
+      }
+      #noSelection {
+        color: var(--text-faint);
+        font-size: 12px;
+      }
+
+      #exportBar {
+        border-top: 1px solid var(--border);
+        padding: 10px 16px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        background: var(--panel);
+        flex: 0 0 auto;
+      }
+      #exportBar .field {
+        width: 150px;
+      }
+      #exportProgressWrap {
+        flex: 1;
+        height: 6px;
+        background: var(--panel-alt);
+        border-radius: 3px;
+        overflow: hidden;
+        display: none;
+      }
+      #exportProgressWrap.active {
+        display: block;
+      }
+      #exportProgressBar {
+        height: 100%;
+        width: 0%;
+        background: var(--amber);
+      }
+      #exportStatus {
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--text-dim);
+        min-width: 120px;
+        text-align: right;
+      }
+      #downloadLink {
+        display: none;
+      }
+
+      details#aboutBox {
+        margin: 0 16px 12px;
+        font-size: 11.5px;
+        color: var(--text-dim);
+      }
+      details#aboutBox summary {
+        cursor: pointer;
+        color: var(--text-dim);
+        font-size: 11px;
+      }
+      details#aboutBox div {
+        padding: 8px 0 2px;
+        max-width: 640px;
+      }
+
+      ::-webkit-scrollbar {
+        width: 10px;
+        height: 10px;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: var(--border);
+        border-radius: 5px;
+      }
+      ::-webkit-scrollbar-track {
+        background: transparent;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>LocalCut</h1>
+      <p>frame-accurate video editing, entirely on this device</p>
+      <div class="spacer"></div>
+      <div class="note">
+        Nothing you load here leaves the browser tab. No uploads, no accounts,
+        no AI.
+      </div>
+    </header>
+
+    <div class="layout">
+      <aside>
+        <div class="head"><span>Media pool</span></div>
+        <div id="dropZone">
+          Click or drop video files here<br />(mp4, webm, mov…)
+        </div>
+        <input type="file" id="fileInput" accept="video/*" multiple />
+        <div id="poolList"></div>
+      </aside>
+
+      <main>
+        <section id="previewSection">
+          <canvas id="previewCanvas" width="960" height="540"></canvas>
+          <div class="transport">
+            <button id="btnStepBack" title="Previous frame">◂</button>
+            <button id="btnPlay" title="Play / pause">▶</button>
+            <button id="btnStepFwd" title="Next frame">▸</button>
+            <input
+              type="range"
+              id="scrub"
+              min="0"
+              max="0"
+              value="0"
+              step="1"
+              disabled
+            />
+            <span class="tc" id="tcReadout">00:00:00:00 / 00:00:00:00</span>
+          </div>
+        </section>
+
+        <section id="timelineSection">
+          <div class="head">
+            <h2>Timeline</h2>
+            <span style="font-size: 11px; color: var(--text-faint)"
+              >click to select · shift-click to extend</span
+            >
+          </div>
+          <div id="timelineTrack">
+            <div id="timelineEmpty">
+              Add a clip from the media pool to start a timeline.
+            </div>
+          </div>
+        </section>
+
+        <section id="inspector">
+          <div class="head">Selection</div>
+          <div id="noSelection">Nothing selected.</div>
+          <div id="insBody" style="display: none">
+            <div class="insGrid">
+              <label class="field"
+                >Source
+                <input type="text" id="insSource" disabled />
+              </label>
+              <label class="field"
+                >In frame
+                <input type="number" id="insIn" min="0" step="1" />
+              </label>
+              <label class="field"
+                >Out frame (exclusive)
+                <input type="number" id="insOut" min="1" step="1" />
+              </label>
+              <label class="field"
+                >Split at frame
+                <input type="number" id="insSplit" step="1" />
+              </label>
+            </div>
+            <div class="btnRow">
+              <button id="btnApplyTrim">Apply trim</button>
+              <button id="btnSplit">Split</button>
+              <button id="btnReverse">Reverse selection</button>
+              <button id="btnMoveLeft">Move left</button>
+              <button id="btnMoveRight">Move right</button>
+            </div>
+            <div class="btnRow">
+              <button id="btnCut" class="danger">Cut</button>
+              <button id="btnCopy">Copy</button>
+              <button id="btnDelete" class="danger">Delete</button>
+              <button id="btnPasteBefore" class="good">Paste before</button>
+              <button id="btnPasteAfter" class="good">Paste after</button>
+            </div>
+            <div id="clipStatus">Clipboard: empty</div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="exportBar">
+      <label class="field" style="width: 170px"
+        >Output resolution
+        <select id="outRes"></select>
+      </label>
+      <label class="field" style="width: 150px"
+        >Target bitrate (kbps)
+        <input type="number" id="outBitrate" min="200" step="100" />
+      </label>
+      <button id="btnPasteEnd" class="good">Paste at end</button>
+      <div class="spacer"></div>
+      <div id="exportProgressWrap"><div id="exportProgressBar"></div></div>
+      <span id="exportStatus"></span>
+      <button id="btnExport" class="primary">Export &amp; download</button>
+      <a id="downloadLink"></a>
+    </div>
+
+    <details id="aboutBox">
+      <summary>How this keeps files from bloating</summary>
+      <div>
+        Cutting, copying, pasting, reversing, and reordering never touch pixel
+        data — they only rearrange references to frames in your original files.
+        The only time video is actually re-encoded is once, when you export, and
+        the encoder is set to match your source's own bitrate and resolution by
+        default (editable above) using the efficient VP9/VP8 codec, so a round
+        trip through this editor doesn't inflate file size the way repeated
+        re-encodes in a typical NLE can. Export runs in real time (it plays
+        through your timeline once while capturing), and the current build
+        handles picture only — audio tracks are not yet carried into the export.
+      </div>
+    </details>
+
+    <script>
+      (function () {
+        "use strict";
+
+        // ---------- state ----------
+        let sources = []; // {id,name,url,video,duration,fps,frameCount,width,height,sizeBytes,locked,thumbCanvas}
+        let timeline = []; // {id,sourceId,startFrame,endFrame,reversed}
+        let selection = []; // array of segment ids, contiguous, in timeline order
+        let clipboard = null; // array of segment templates {sourceId,startFrame,endFrame,reversed}
+        let playhead = 0;
+        let isPlaying = false;
+        let playToken = 0;
+
+        const FRAME_RATES = [23.976, 24, 25, 29.97, 30, 48, 50, 59.94, 60];
+
+        const uid = () => Math.random().toString(36).slice(2, 10);
+
+        function clamp(v, lo, hi) {
+          return Math.max(lo, Math.min(hi, v));
+        }
+
+        function formatTC(frame, fps) {
+          fps = Math.round(fps);
+          const totalSeconds = Math.floor(frame / fps);
+          const ff = frame % fps;
+          const hh = Math.floor(totalSeconds / 3600);
+          const mm = Math.floor((totalSeconds % 3600) / 60);
+          const ss = totalSeconds % 60;
+          const p2 = (n) => String(n).padStart(2, "0");
+          return `${p2(hh)}:${p2(mm)}:${p2(ss)}:${p2(ff)}`;
+        }
+
+        // ---------- source loading ----------
+        const fileInput = document.getElementById("fileInput");
+        const dropZone = document.getElementById("dropZone");
+        dropZone.addEventListener("click", () => fileInput.click());
+        dropZone.addEventListener("dragover", (e) => {
+          e.preventDefault();
+          dropZone.style.borderColor = "var(--text-dim)";
+        });
+        dropZone.addEventListener("dragleave", () => {
+          dropZone.style.borderColor = "var(--border)";
+        });
+        dropZone.addEventListener("drop", (e) => {
+          e.preventDefault();
+          dropZone.style.borderColor = "var(--border)";
+          handleFiles(e.dataTransfer.files);
+        });
+        fileInput.addEventListener("change", () => {
+          handleFiles(fileInput.files);
+          fileInput.value = "";
+        });
+
+        function handleFiles(fileList) {
+          Array.from(fileList).forEach((file) => {
+            if (!file.type.startsWith("video/")) return;
+            const url = URL.createObjectURL(file);
+            const video = document.createElement("video");
+            video.src = url;
+            video.muted = true;
+            video.playsInline = true;
+            video.preload = "auto";
+            const source = {
+              id: uid(),
+              name: file.name,
+              url,
+              video,
+              duration: 0,
+              fps: 30,
+              frameCount: 0,
+              width: 0,
+              height: 0,
+              sizeBytes: file.size,
+              locked: false,
+              thumbCanvas: null,
+            };
+            video.addEventListener("loadedmetadata", async () => {
+              source.duration = video.duration;
+              source.width = video.videoWidth;
+              source.height = video.videoHeight;
+              source.frameCount = Math.max(
+                1,
+                Math.round(source.duration * source.fps),
+              );
+              sources.push(source);
+              try {
+                await seekVideo(video, 0);
+                source.thumbCanvas = makeThumb(video);
+              } catch (e) {
+                /* thumbnail is best-effort */
+              }
+              renderPool();
+              refreshResOptions();
+            });
+            video.addEventListener("error", () => {
+              console.warn("Could not load", file.name);
+            });
+          });
+        }
+
+        function makeThumb(video) {
+          const c = document.createElement("canvas");
+          c.width = 160;
+          c.height = 90;
+          const ctx = c.getContext("2d");
+          drawFitted(
+            ctx,
+            video,
+            c.width,
+            c.height,
+            video.videoWidth,
+            video.videoHeight,
+          );
+          return c;
+        }
+
+        function drawFitted(ctx, drawable, cw, ch, sw, sh) {
+          ctx.fillStyle = "#000";
+          ctx.fillRect(0, 0, cw, ch);
+          if (!sw || !sh) return;
+          const scale = Math.min(cw / sw, ch / sh);
+          const w = sw * scale,
+            h = sh * scale;
+          const x = (cw - w) / 2,
+            y = (ch - h) / 2;
+          ctx.drawImage(drawable, x, y, w, h);
+        }
+
+        function seekVideo(video, time) {
+          return new Promise((resolve) => {
+            time = clamp(time, 0, Math.max(0, video.duration - 0.001));
+            if (Math.abs(video.currentTime - time) < 0.0008) {
+              resolve();
+              return;
+            }
+            const onSeeked = () => {
+              video.removeEventListener("seeked", onSeeked);
+              resolve();
+            };
+            video.addEventListener("seeked", onSeeked);
+            video.currentTime = time;
+          });
+        }
+
+        // ---------- media pool rendering ----------
+        const poolList = document.getElementById("poolList");
+
+        function renderPool() {
+          poolList.innerHTML = "";
+          sources.forEach((src) => {
+            const card = document.createElement("div");
+            card.className = "srcCard";
+
+            const thumbWrap = document.createElement("div");
+            thumbWrap.className = "thumbWrap";
+            if (src.thumbCanvas) thumbWrap.appendChild(src.thumbCanvas);
+            card.appendChild(thumbWrap);
+
+            const meta = document.createElement("div");
+            meta.className = "meta";
+            meta.innerHTML = `
+        <div class="name" title="${escapeHtml(src.name)}">${escapeHtml(src.name)}</div>
+        <div class="stats">${formatTC(src.frameCount - 1, src.fps)} · ${src.width}×${src.height} · ${(src.sizeBytes / 1024 / 1024).toFixed(1)} MB</div>
+      `;
+            card.appendChild(meta);
+
+            const row = document.createElement("div");
+            row.className = "row";
+
+            const fpsSel = document.createElement("select");
+            FRAME_RATES.forEach((f) => {
+              const opt = document.createElement("option");
+              opt.value = f;
+              opt.textContent = f + " fps";
+              if (f === src.fps) opt.selected = true;
+              fpsSel.appendChild(opt);
+            });
+            fpsSel.disabled = src.locked;
+            fpsSel.title = src.locked
+              ? "Locked — already used in the timeline"
+              : "Set the frame rate for accurate frame numbers";
+            fpsSel.addEventListener("change", () => {
+              const newFps = parseFloat(fpsSel.value);
+              const oldFps = src.fps;
+              src.fps = newFps;
+              src.frameCount = Math.max(1, Math.round(src.duration * newFps));
+              // rescale any (shouldn't exist yet, but just in case) references
+              timeline.forEach((seg) => {
+                if (seg.sourceId === src.id) {
+                  seg.startFrame = clamp(
+                    Math.round((seg.startFrame * newFps) / oldFps),
+                    0,
+                    src.frameCount - 1,
+                  );
+                  seg.endFrame = clamp(
+                    Math.round((seg.endFrame * newFps) / oldFps),
+                    seg.startFrame + 1,
+                    src.frameCount,
+                  );
+                }
+              });
+              meta.querySelector(".stats").textContent =
+                `${formatTC(src.frameCount - 1, src.fps)} · ${src.width}×${src.height} · ${(src.sizeBytes / 1024 / 1024).toFixed(1)} MB`;
+              renderTimeline();
+            });
+            row.appendChild(fpsSel);
+
+            const addBtn = document.createElement("button");
+            addBtn.textContent = "Add to timeline";
+            addBtn.addEventListener("click", () => {
+              src.locked = true;
+              fpsSel.disabled = true;
+              timeline.push({
+                id: uid(),
+                sourceId: src.id,
+                startFrame: 0,
+                endFrame: src.frameCount,
+                reversed: false,
+              });
+              renderTimeline();
+              renderPool();
+              refreshResOptions();
+            });
+            row.appendChild(addBtn);
+            meta.appendChild(row);
+            poolList.appendChild(card);
+          });
+        }
+
+        function escapeHtml(s) {
+          return s.replace(
+            /[&<>"']/g,
+            (c) =>
+              ({
+                "&": "&amp;",
+                "<": "&lt;",
+                ">": "&gt;",
+                '"': "&quot;",
+                "'": "&#39;",
+              })[c],
+          );
+        }
+
+        // ---------- timeline model helpers ----------
+        function segLength(seg) {
+          return seg.endFrame - seg.startFrame;
+        }
+        function totalFrames() {
+          return timeline.reduce((n, s) => n + segLength(s), 0);
+        }
+        function sourceOf(seg) {
+          return sources.find((s) => s.id === seg.sourceId);
+        }
+
+        function offsets() {
+          let acc = 0;
+          const out = [];
+          for (const seg of timeline) {
+            out.push(acc);
+            acc += segLength(seg);
+          }
+          return out;
+        }
+
+        function localToSourceFrame(seg, localIndex) {
+          return seg.reversed
+            ? seg.endFrame - 1 - localIndex
+            : seg.startFrame + localIndex;
+        }
+
+        function globalFrameToLocation(g) {
+          let acc = 0;
+          for (const seg of timeline) {
+            const len = segLength(seg);
+            if (g < acc + len) {
+              return { seg, sourceFrame: localToSourceFrame(seg, g - acc) };
+            }
+            acc += len;
+          }
+          return null;
+        }
+
+        // ---------- timeline rendering ----------
+        const track = document.getElementById("timelineTrack");
+        const PX_PER_FRAME = 1.4;
+        const MIN_SEG_PX = 34;
+
+        function renderTimeline() {
+          track.innerHTML = "";
+          if (timeline.length === 0) {
+            const empty = document.createElement("div");
+            empty.id = "timelineEmpty";
+            empty.textContent =
+              "Add a clip from the media pool to start a timeline.";
+            track.appendChild(empty);
+          } else {
+            timeline.forEach((seg) => {
+              const src = sourceOf(seg);
+              const div = document.createElement("div");
+              div.className =
+                "seg" + (selection.includes(seg.id) ? " selected" : "");
+              const w = Math.max(MIN_SEG_PX, segLength(seg) * PX_PER_FRAME);
+              div.style.width = w + "px";
+              div.innerHTML = `
+          <div class="sname">${src ? escapeHtml(src.name) : "(missing)"}</div>
+          <div class="srange">${seg.startFrame}–${seg.endFrame} · ${segLength(seg)}f</div>
+          ${seg.reversed ? '<div class="rev">⇄</div>' : ""}
+        `;
+              div.addEventListener("click", (e) =>
+                onSegClick(seg.id, e.shiftKey),
+              );
+              track.appendChild(div);
+            });
+          }
+          const total = totalFrames();
+          scrub.max = Math.max(0, total - 1);
+          scrub.disabled = total === 0;
+          if (playhead > total - 1) playhead = Math.max(0, total - 1);
+          scrub.value = playhead;
+          updateTcReadout();
+          renderInspector();
+          refreshResOptions();
+          renderCurrentFrame();
+        }
+
+        function onSegClick(segId, shiftKey) {
+          if (!shiftKey || selection.length === 0) {
+            selection = [segId];
+          } else {
+            const ids = timeline.map((s) => s.id);
+            const anchor = ids.indexOf(selection[0]);
+            const clicked = ids.indexOf(segId);
+            const [lo, hi] =
+              anchor < clicked ? [anchor, clicked] : [clicked, anchor];
+            selection = ids.slice(lo, hi + 1);
+            // keep anchor first for consistency
+            if (selection[0] !== selection.find((id) => id === selection[0])) {
+            }
+          }
+          renderTimeline();
+        }
+
+        function selectedSegments() {
+          return selection
+            .map((id) => timeline.find((s) => s.id === id))
+            .filter(Boolean);
+        }
+
+        // ---------- inspector ----------
+        const insBody = document.getElementById("insBody");
+        const noSelection = document.getElementById("noSelection");
+        const insSource = document.getElementById("insSource");
+        const insIn = document.getElementById("insIn");
+        const insOut = document.getElementById("insOut");
+        const insSplit = document.getElementById("insSplit");
+        const clipStatus = document.getElementById("clipStatus");
+
+        function renderInspector() {
+          const segs = selectedSegments();
+          if (segs.length === 0) {
+            insBody.style.display = "none";
+            noSelection.style.display = "block";
+          } else {
+            insBody.style.display = "block";
+            noSelection.style.display = "none";
+            const single = segs.length === 1 ? segs[0] : null;
+            const src = single ? sourceOf(single) : null;
+            insSource.value = single
+              ? src
+                ? src.name
+                : "(missing)"
+              : `${segs.length} segments selected`;
+            insIn.disabled = !single;
+            insOut.disabled = !single;
+            insSplit.disabled = !single;
+            if (single) {
+              insIn.value = single.startFrame;
+              insOut.value = single.endFrame;
+              insIn.max = single.endFrame - 1;
+              insOut.max = src ? src.frameCount : single.endFrame;
+              insSplit.value = Math.floor(
+                (single.startFrame + single.endFrame) / 2,
+              );
+              insSplit.min = single.startFrame + 1;
+              insSplit.max = single.endFrame - 1;
+              document.getElementById("btnSplit").disabled =
+                segLength(single) < 2;
+            } else {
+              insIn.value = "";
+              insOut.value = "";
+              insSplit.value = "";
+              document.getElementById("btnSplit").disabled = true;
+            }
+            document.getElementById("btnMoveLeft").disabled = segs.length !== 1;
+            document.getElementById("btnMoveRight").disabled =
+              segs.length !== 1;
+          }
+          clipStatus.textContent = clipboard
+            ? `Clipboard: ${clipboard.length} segment${clipboard.length > 1 ? "s" : ""} (${clipboard.reduce((n, s) => n + (s.endFrame - s.startFrame), 0)} frames)`
+            : "Clipboard: empty";
+        }
+
+        document
+          .getElementById("btnApplyTrim")
+          .addEventListener("click", () => {
+            const segs = selectedSegments();
+            if (segs.length !== 1) return;
+            const seg = segs[0];
+            const src = sourceOf(seg);
+            let inF = clamp(
+              parseInt(insIn.value, 10) || 0,
+              0,
+              src.frameCount - 1,
+            );
+            let outF = clamp(
+              parseInt(insOut.value, 10) || src.frameCount,
+              inF + 1,
+              src.frameCount,
+            );
+            seg.startFrame = inF;
+            seg.endFrame = outF;
+            renderTimeline();
+          });
+
+        document.getElementById("btnSplit").addEventListener("click", () => {
+          const segs = selectedSegments();
+          if (segs.length !== 1) return;
+          const seg = segs[0];
+          const at = clamp(
+            parseInt(insSplit.value, 10),
+            seg.startFrame + 1,
+            seg.endFrame - 1,
+          );
+          const idx = timeline.findIndex((s) => s.id === seg.id);
+          const left = {
+            id: uid(),
+            sourceId: seg.sourceId,
+            startFrame: seg.startFrame,
+            endFrame: at,
+            reversed: seg.reversed,
+          };
+          const right = {
+            id: uid(),
+            sourceId: seg.sourceId,
+            startFrame: at,
+            endFrame: seg.endFrame,
+            reversed: seg.reversed,
+          };
+          const ordered = seg.reversed ? [right, left] : [left, right];
+          timeline.splice(idx, 1, ordered[0], ordered[1]);
+          selection = [ordered[0].id];
+          renderTimeline();
+        });
+
+        document.getElementById("btnReverse").addEventListener("click", () => {
+          const ids = new Set(selection);
+          if (ids.size === 0) return;
+          const idxs = timeline
+            .map((s, i) => (ids.has(s.id) ? i : -1))
+            .filter((i) => i >= 0);
+          const lo = Math.min(...idxs),
+            hi = Math.max(...idxs);
+          const run = timeline.slice(lo, hi + 1);
+          run.forEach((s) => (s.reversed = !s.reversed));
+          run.reverse();
+          timeline.splice(lo, run.length, ...run);
+          selection = run.map((s) => s.id);
+          renderTimeline();
+        });
+
+        document
+          .getElementById("btnMoveLeft")
+          .addEventListener("click", () => moveSelected(-1));
+        document
+          .getElementById("btnMoveRight")
+          .addEventListener("click", () => moveSelected(1));
+        function moveSelected(dir) {
+          const segs = selectedSegments();
+          if (segs.length !== 1) return;
+          const idx = timeline.findIndex((s) => s.id === segs[0].id);
+          const newIdx = idx + dir;
+          if (newIdx < 0 || newIdx >= timeline.length) return;
+          const [item] = timeline.splice(idx, 1);
+          timeline.splice(newIdx, 0, item);
+          renderTimeline();
+        }
+
+        document
+          .getElementById("btnCut")
+          .addEventListener("click", () => cutOrDelete(true));
+        document
+          .getElementById("btnDelete")
+          .addEventListener("click", () => cutOrDelete(false));
+        function cutOrDelete(toClipboard) {
+          const segs = selectedSegments();
+          if (segs.length === 0) return;
+          if (toClipboard) {
+            clipboard = segs.map((s) => ({
+              sourceId: s.sourceId,
+              startFrame: s.startFrame,
+              endFrame: s.endFrame,
+              reversed: s.reversed,
+            }));
+          }
+          const ids = new Set(selection);
+          timeline = timeline.filter((s) => !ids.has(s.id));
+          selection = [];
+          renderTimeline();
+        }
+
+        document.getElementById("btnCopy").addEventListener("click", () => {
+          const segs = selectedSegments();
+          if (segs.length === 0) return;
+          clipboard = segs.map((s) => ({
+            sourceId: s.sourceId,
+            startFrame: s.startFrame,
+            endFrame: s.endFrame,
+            reversed: s.reversed,
+          }));
+          renderInspector();
+        });
+
+        function pasteAt(idx) {
+          if (!clipboard) return;
+          const clones = clipboard.map((t) => ({
+            id: uid(),
+            sourceId: t.sourceId,
+            startFrame: t.startFrame,
+            endFrame: t.endFrame,
+            reversed: t.reversed,
+          }));
+          timeline.splice(idx, 0, ...clones);
+          selection = clones.map((c) => c.id);
+          renderTimeline();
+        }
+        document
+          .getElementById("btnPasteBefore")
+          .addEventListener("click", () => {
+            const segs = selectedSegments();
+            const idx = segs.length
+              ? timeline.findIndex((s) => s.id === segs[0].id)
+              : timeline.length;
+            pasteAt(idx);
+          });
+        document
+          .getElementById("btnPasteAfter")
+          .addEventListener("click", () => {
+            const segs = selectedSegments();
+            const idx = segs.length
+              ? timeline.findIndex((s) => s.id === segs[segs.length - 1].id) + 1
+              : timeline.length;
+            pasteAt(idx);
+          });
+        document
+          .getElementById("btnPasteEnd")
+          .addEventListener("click", () => pasteAt(timeline.length));
+
+        // ---------- preview ----------
+        const canvas = document.getElementById("previewCanvas");
+        const ctx = canvas.getContext("2d");
+        const scrub = document.getElementById("scrub");
+        const tcReadout = document.getElementById("tcReadout");
+
+        function projectFps() {
+          return timeline.length ? sourceOf(timeline[0]).fps : 30;
+        }
+
+        function updateTcReadout() {
+          const fps = projectFps();
+          const total = Math.max(1, totalFrames());
+          tcReadout.textContent = `${formatTC(playhead, fps)} / ${formatTC(total - 1, fps)}`;
+        }
+
+        async function renderCurrentFrame() {
+          if (timeline.length === 0) {
+            ctx.fillStyle = "#000";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            return;
+          }
+          const loc = globalFrameToLocation(
+            clamp(playhead, 0, totalFrames() - 1),
+          );
+          if (!loc) return;
+          const src = sourceOf(loc.seg);
+          if (!src) return;
+          try {
+            await seekVideo(src.video, (loc.sourceFrame + 0.5) / src.fps);
+          } catch (e) {
+            /* ignore */
+          }
+          drawFitted(
+            ctx,
+            src.video,
+            canvas.width,
+            canvas.height,
+            src.width,
+            src.height,
+          );
+        }
+
+        scrub.addEventListener("input", () => {
+          playhead = parseInt(scrub.value, 10) || 0;
+          updateTcReadout();
+          renderCurrentFrame();
+        });
+
+        document
+          .getElementById("btnStepBack")
+          .addEventListener("click", () => stepFrame(-1));
+        document
+          .getElementById("btnStepFwd")
+          .addEventListener("click", () => stepFrame(1));
+        function stepFrame(d) {
+          const total = totalFrames();
+          if (total === 0) return;
+          playhead = clamp(playhead + d, 0, total - 1);
+          scrub.value = playhead;
+          updateTcReadout();
+          renderCurrentFrame();
+        }
+
+        const btnPlay = document.getElementById("btnPlay");
+        btnPlay.addEventListener("click", () => {
+          if (isPlaying) {
+            isPlaying = false;
+            btnPlay.textContent = "▶";
+            return;
+          }
+          if (totalFrames() === 0) return;
+          isPlaying = true;
+          btnPlay.textContent = "⏸";
+          const myToken = ++playToken;
+          (async function loop() {
+            while (
+              isPlaying &&
+              playToken === myToken &&
+              playhead < totalFrames() - 1
+            ) {
+              playhead++;
+              scrub.value = playhead;
+              updateTcReadout();
+              await renderCurrentFrame();
+            }
+            isPlaying = false;
+            btnPlay.textContent = "▶";
+          })();
+        });
+
+        // ---------- export ----------
+        const outRes = document.getElementById("outRes");
+        const outBitrate = document.getElementById("outBitrate");
+
+        function refreshResOptions() {
+          const seen = new Map();
+          sources.forEach((s) => seen.set(`${s.width}x${s.height}`, s));
+          const prevVal = outRes.value;
+          outRes.innerHTML = "";
+          seen.forEach((s, key) => {
+            const opt = document.createElement("option");
+            opt.value = key;
+            opt.textContent = key;
+            outRes.appendChild(opt);
+          });
+          if ([...seen.keys()].includes(prevVal)) outRes.value = prevVal;
+          suggestBitrate();
+        }
+
+        function suggestBitrate() {
+          const used = new Set(timeline.map((s) => s.sourceId));
+          const relevant = sources.filter((s) => used.has(s.id));
+          const pool = relevant.length ? relevant : sources;
+          if (pool.length === 0) {
+            outBitrate.value = 6000;
+            return;
+          }
+          const maxBps = Math.max(
+            ...pool.map((s) => (s.sizeBytes * 8) / Math.max(1, s.duration)),
+          );
+          outBitrate.value = Math.max(500, Math.round(maxBps / 1000));
+        }
+
+        const btnExport = document.getElementById("btnExport");
+        const progWrap = document.getElementById("exportProgressWrap");
+        const progBar = document.getElementById("exportProgressBar");
+        const exportStatus = document.getElementById("exportStatus");
+        const downloadLink = document.getElementById("downloadLink");
+
+        btnExport.addEventListener("click", runExport);
+
+        async function runExport() {
+          const total = totalFrames();
+          if (total === 0) {
+            exportStatus.textContent = "Timeline is empty.";
+            return;
+          }
+          if (typeof MediaRecorder === "undefined" || !canvas.captureStream) {
+            exportStatus.textContent =
+              "This browser cannot export (needs MediaRecorder + captureStream).";
+            return;
+          }
+          const [w, h] = outRes.value.split("x").map(Number);
+          const outCanvas = document.createElement("canvas");
+          outCanvas.width = w || canvas.width;
+          outCanvas.height = h || canvas.height;
+          const outCtx = outCanvas.getContext("2d");
+          const fps = projectFps();
+          const bitrate =
+            clamp(parseInt(outBitrate.value, 10) || 4000, 200, 100000) * 1000;
+
+          let mimeType = "video/webm;codecs=vp9";
+          if (!MediaRecorder.isTypeSupported(mimeType))
+            mimeType = "video/webm;codecs=vp8";
+          if (!MediaRecorder.isTypeSupported(mimeType)) mimeType = "video/webm";
+
+          btnExport.disabled = true;
+          progWrap.classList.add("active");
+          progBar.style.width = "0%";
+          exportStatus.textContent = "Preparing…";
+
+          const stream = outCanvas.captureStream(0);
+          const track = stream.getVideoTracks()[0];
+          const chunks = [];
+          const recorder = new MediaRecorder(stream, {
+            mimeType,
+            videoBitsPerSecond: bitrate,
+          });
+          recorder.ondataavailable = (e) => {
+            if (e.data && e.data.size) chunks.push(e.data);
+          };
+
+          const done = new Promise((resolve) => {
+            recorder.onstop = resolve;
+          });
+          recorder.start();
+
+          const frameDelay = 1000 / fps;
+          for (let g = 0; g < total; g++) {
+            const loc = globalFrameToLocation(g);
+            if (loc) {
+              const src = sourceOf(loc.seg);
+              if (src) {
+                try {
+                  await seekVideo(src.video, (loc.sourceFrame + 0.5) / src.fps);
+                } catch (e) {}
+                drawFitted(
+                  outCtx,
+                  src.video,
+                  outCanvas.width,
+                  outCanvas.height,
+                  src.width,
+                  src.height,
+                );
+              }
+            }
+            track.requestFrame();
+            exportStatus.textContent = `Encoding frame ${g + 1} / ${total}`;
+            progBar.style.width = Math.round(((g + 1) / total) * 100) + "%";
+            await new Promise((r) => setTimeout(r, frameDelay));
+          }
+
+          recorder.stop();
+          await done;
+
+          const blob = new Blob(chunks, { type: mimeType.split(";")[0] });
+          const url = URL.createObjectURL(blob);
+          downloadLink.href = url;
+          downloadLink.download = "localcut-export.webm";
+          downloadLink.click();
+
+          exportStatus.textContent = `Done — ${(blob.size / 1024 / 1024).toFixed(1)} MB`;
+          progWrap.classList.remove("active");
+          btnExport.disabled = false;
+        }
+
+        // ---------- init ----------
+        renderTimeline();
+        renderPool();
+        refreshResOptions();
+      })();
+    </script>
+  </body>
+</html>
