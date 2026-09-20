@@ -272,8 +272,9 @@
         max-width: 720px;
       }
       .transport button {
-        width: 34px;
+        min-width: 34px;
         height: 28px;
+        padding: 0 8px;
       }
       .transport input[type="range"] {
         flex: 1;
@@ -486,9 +487,19 @@
         <section id="previewSection">
           <canvas id="previewCanvas" width="960" height="540"></canvas>
           <div class="transport">
-            <button id="btnStepBack" title="Previous frame">◂</button>
-            <button id="btnPlay" title="Play / pause">▶</button>
-            <button id="btnStepFwd" title="Next frame">▸</button>
+            <button id="btnStepBack" title="Previous frame (hold to repeat)">
+              ◂
+            </button>
+            <button id="btnPlay" title="Play at normal speed / pause">▶</button>
+            <button
+              id="btnPlayFast"
+              title="Play as fast as frames can be drawn"
+            >
+              ▶▶
+            </button>
+            <button id="btnStepFwd" title="Next frame (hold to repeat)">
+              ▸
+            </button>
             <input
               type="range"
               id="scrub"
@@ -594,7 +605,7 @@
       (function () {
         "use strict";
 
-        const VERSION = "1.2.0";
+        const VERSION = "1.3.0";
         document.getElementById("versionTag").textContent = "v" + VERSION;
 
         // ---------- state ----------
@@ -1300,12 +1311,33 @@
           renderCurrentFrame();
         });
 
-        document
-          .getElementById("btnStepBack")
-          .addEventListener("click", () => stepFrame(-1));
-        document
-          .getElementById("btnStepFwd")
-          .addEventListener("click", () => stepFrame(1));
+        // Press once for a single step; press and hold to repeat at a steady rate.
+        function makeRepeatable(button, action) {
+          let holdTimeout = null,
+            repeatInterval = null;
+          const stop = () => {
+            clearTimeout(holdTimeout);
+            clearInterval(repeatInterval);
+            holdTimeout = null;
+            repeatInterval = null;
+          };
+          button.addEventListener("pointerdown", (e) => {
+            e.preventDefault();
+            action();
+            holdTimeout = setTimeout(() => {
+              repeatInterval = setInterval(action, 70);
+            }, 350);
+          });
+          button.addEventListener("pointerup", stop);
+          button.addEventListener("pointerleave", stop);
+          button.addEventListener("pointercancel", stop);
+        }
+        makeRepeatable(document.getElementById("btnStepBack"), () =>
+          stepFrame(-1),
+        );
+        makeRepeatable(document.getElementById("btnStepFwd"), () =>
+          stepFrame(1),
+        );
         function stepFrame(d) {
           const total = totalFrames();
           if (total === 0) return;
@@ -1316,16 +1348,25 @@
         }
 
         const btnPlay = document.getElementById("btnPlay");
-        btnPlay.addEventListener("click", () => {
+        const btnPlayFast = document.getElementById("btnPlayFast");
+
+        function togglePlayback(paced) {
           if (isPlaying) {
             isPlaying = false;
+            playToken++;
             btnPlay.textContent = "▶";
+            btnPlayFast.textContent = "▶▶";
             return;
           }
           if (totalFrames() === 0) return;
           isPlaying = true;
-          btnPlay.textContent = "⏸";
+          btnPlay.textContent = paced ? "⏸" : "▶";
+          btnPlayFast.textContent = paced ? "▶▶" : "⏸";
           const myToken = ++playToken;
+          const fps = projectFps();
+          const frameDelay = 1000 / fps;
+          const startTime = performance.now();
+          let framesAdvanced = 0;
           (async function loop() {
             while (
               isPlaying &&
@@ -1333,14 +1374,28 @@
               playhead < totalFrames() - 1
             ) {
               playhead++;
+              framesAdvanced++;
               scrub.value = playhead;
               updateTcReadout();
               await renderCurrentFrame();
+              if (paced) {
+                // hold to real playback speed, correcting for any drift rather
+                // than just adding a fixed delay after each frame
+                const target = startTime + framesAdvanced * frameDelay;
+                const wait = target - performance.now();
+                if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+              }
             }
-            isPlaying = false;
-            btnPlay.textContent = "▶";
+            if (playToken === myToken) {
+              isPlaying = false;
+              btnPlay.textContent = "▶";
+              btnPlayFast.textContent = "▶▶";
+            }
           })();
-        });
+        }
+
+        btnPlay.addEventListener("click", () => togglePlayback(true));
+        btnPlayFast.addEventListener("click", () => togglePlayback(false));
 
         // ---------- export ----------
         const outRes = document.getElementById("outRes");
@@ -1537,6 +1592,7 @@
           renderTimeline();
           refreshResOptions();
           btnPlay.textContent = "▶";
+          btnPlayFast.textContent = "▶▶";
           exportStatus.textContent = "";
           progWrap.classList.remove("active");
           progBar.style.width = "0%";
