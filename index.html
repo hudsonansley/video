@@ -654,6 +654,9 @@
               sizeBytes: file.size,
               locked: false,
               thumbCanvas: null,
+              frameCache: [],
+              cacheReady: false,
+              cacheProgress: 0,
             };
             video.addEventListener("loadedmetadata", async () => {
               source.duration = video.duration;
@@ -672,6 +675,7 @@
               }
               renderPool();
               refreshResOptions();
+              buildFrameCache(source); // fire and forget, updates UI as it progresses
             });
             video.addEventListener("error", () => {
               console.warn("Could not load", file.name);
@@ -723,6 +727,82 @@
           });
         }
 
+        // Decode every frame of a source once, sequentially forward (cheap), into a
+        // compressed in-memory cache. This is what makes reverse (and scrubbing,
+        // and export) fast and *consistent*: without it, playing frames out of
+        // order forces the decoder to jump back to a keyframe and re-decode
+        // forward for every single frame, which is slow and — because export
+        // timing is tied to real wall-clock capture — silently stretches the
+        // exported video's duration. Reading from this cache instead means every
+        // frame costs the same small amount of time, in either direction.
+        const MAX_CACHE_WIDTH = 1280;
+        async function buildFrameCache(source) {
+          source.cacheReady = false;
+          source.cacheProgress = 0;
+          source.frameCache = new Array(source.frameCount);
+          const scale =
+            source.width > MAX_CACHE_WIDTH ? MAX_CACHE_WIDTH / source.width : 1;
+          const cw = Math.max(1, Math.round(source.width * scale));
+          const ch = Math.max(1, Math.round(source.height * scale));
+          const off = document.createElement("canvas");
+          off.width = cw;
+          off.height = ch;
+          const offCtx = off.getContext("2d");
+          for (let i = 0; i < source.frameCount; i++) {
+            try {
+              await seekVideo(source.video, (i + 0.5) / source.fps);
+              offCtx.drawImage(source.video, 0, 0, cw, ch);
+              const blob = await new Promise((res) =>
+                off.toBlob(res, "image/jpeg", 0.85),
+              );
+              source.frameCache[i] = blob;
+            } catch (e) {
+              source.frameCache[i] = null;
+            }
+            source.cacheProgress = i + 1;
+            if (i % 5 === 0 || i === source.frameCount - 1)
+              updateCacheProgressUI(source);
+          }
+          source.cacheReady = true;
+          updateCacheProgressUI(source);
+        }
+
+        function updateCacheProgressUI(source) {
+          if (source._progressEl) {
+            source._progressEl.textContent = source.cacheReady
+              ? "Ready"
+              : `Decoding frames… ${source.cacheProgress}/${source.frameCount}`;
+          }
+          if (source._addBtn) {
+            source._addBtn.disabled = !source.cacheReady;
+            source._addBtn.textContent = source.cacheReady
+              ? "Add to timeline"
+              : "Decoding…";
+          }
+        }
+
+        // Draw a specific source frame into a context, using the cache when it's
+        // ready and falling back to a live seek if it isn't (yet) — this keeps
+        // scrubbing responsive even on a source that's still being decoded.
+        async function drawSourceFrame(ctx2, source, frameIndex, cw, ch) {
+          frameIndex = clamp(frameIndex, 0, source.frameCount - 1);
+          const blob = source.frameCache && source.frameCache[frameIndex];
+          if (blob) {
+            try {
+              const bmp = await createImageBitmap(blob);
+              drawFitted(ctx2, bmp, cw, ch, bmp.width, bmp.height);
+              if (bmp.close) bmp.close();
+              return;
+            } catch (e) {
+              /* fall through to live seek */
+            }
+          }
+          try {
+            await seekVideo(source.video, (frameIndex + 0.5) / source.fps);
+          } catch (e) {}
+          drawFitted(ctx2, source.video, cw, ch, source.width, source.height);
+        }
+
         // ---------- media pool rendering ----------
         const poolList = document.getElementById("poolList");
 
@@ -742,7 +822,9 @@
             meta.innerHTML = `
         <div class="name" title="${escapeHtml(src.name)}">${escapeHtml(src.name)}</div>
         <div class="stats">${formatTC(src.frameCount - 1, src.fps)} · ${src.width}×${src.height} · ${(src.sizeBytes / 1024 / 1024).toFixed(1)} MB</div>
+        <div class="stats" style="margin-top:2px;color:var(--amber);"></div>
       `;
+            src._progressEl = meta.querySelector(".stats:last-child");
             card.appendChild(meta);
 
             const row = document.createElement("div");
@@ -787,7 +869,10 @@
             row.appendChild(fpsSel);
 
             const addBtn = document.createElement("button");
-            addBtn.textContent = "Add to timeline";
+            addBtn.textContent = src.cacheReady
+              ? "Add to timeline"
+              : "Decoding…";
+            addBtn.disabled = !src.cacheReady;
             addBtn.addEventListener("click", () => {
               src.locked = true;
               fpsSel.disabled = true;
@@ -802,9 +887,11 @@
               renderPool();
               refreshResOptions();
             });
+            src._addBtn = addBtn;
             row.appendChild(addBtn);
             meta.appendChild(row);
             poolList.appendChild(card);
+            updateCacheProgressUI(src);
           });
         }
 
@@ -1164,18 +1251,12 @@
           if (!loc) return;
           const src = sourceOf(loc.seg);
           if (!src) return;
-          try {
-            await seekVideo(src.video, (loc.sourceFrame + 0.5) / src.fps);
-          } catch (e) {
-            /* ignore */
-          }
-          drawFitted(
+          await drawSourceFrame(
             ctx,
-            src.video,
+            src,
+            loc.sourceFrame,
             canvas.width,
             canvas.height,
-            src.width,
-            src.height,
           );
         }
 
@@ -1279,6 +1360,15 @@
               "This browser cannot export (needs MediaRecorder + captureStream).";
             return;
           }
+          const usedSourceIds = new Set(timeline.map((s) => s.sourceId));
+          const usedSources = [...usedSourceIds].map((id) =>
+            sources.find((s) => s.id === id),
+          );
+          if (usedSources.some((s) => !s || !s.cacheReady)) {
+            exportStatus.textContent =
+              "Still decoding a source clip — try export again in a moment.";
+            return;
+          }
           const [w, h] = outRes.value.split("x").map(Number);
           const outCanvas = document.createElement("canvas");
           outCanvas.width = w || canvas.width;
@@ -1315,28 +1405,30 @@
           recorder.start();
 
           const frameDelay = 1000 / fps;
+          const startTime = performance.now();
           for (let g = 0; g < total; g++) {
             const loc = globalFrameToLocation(g);
             if (loc) {
               const src = sourceOf(loc.seg);
               if (src) {
-                try {
-                  await seekVideo(src.video, (loc.sourceFrame + 0.5) / src.fps);
-                } catch (e) {}
-                drawFitted(
+                await drawSourceFrame(
                   outCtx,
-                  src.video,
+                  src,
+                  loc.sourceFrame,
                   outCanvas.width,
                   outCanvas.height,
-                  src.width,
-                  src.height,
                 );
               }
             }
             track.requestFrame();
             exportStatus.textContent = `Encoding frame ${g + 1} / ${total}`;
             progBar.style.width = Math.round(((g + 1) / total) * 100) + "%";
-            await new Promise((r) => setTimeout(r, frameDelay));
+            // Pace against a fixed schedule (not "seek time + delay") so a slow
+            // frame never compounds into drift, and every frame — forward or
+            // reversed — lands at its correct timestamp.
+            const target = startTime + (g + 1) * frameDelay;
+            const wait = target - performance.now();
+            if (wait > 0) await new Promise((r) => setTimeout(r, wait));
           }
 
           recorder.stop();
