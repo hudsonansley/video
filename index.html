@@ -270,6 +270,10 @@
         margin-top: 10px;
         width: 100%;
         max-width: 720px;
+        flex-wrap: wrap;
+      }
+      .transport .spacer2 {
+        flex: 1;
       }
       .transport button {
         min-width: 34px;
@@ -511,6 +515,16 @@
             />
             <span class="tc" id="tcReadout">00:00:00:00 / 00:00:00:00</span>
           </div>
+          <div class="transport" style="margin-top: 6px">
+            <span class="tc" id="clipReadout">—</span>
+            <div class="spacer2"></div>
+            <button
+              id="btnUseFrame"
+              title="Select this clip in the timeline and copy the current frame number into the Split at frame field"
+            >
+              Select clip &amp; use frame for split
+            </button>
+          </div>
         </section>
 
         <section id="timelineSection">
@@ -605,7 +619,7 @@
       (function () {
         "use strict";
 
-        const VERSION = "1.3.0";
+        const VERSION = "1.4.0";
         document.getElementById("versionTag").textContent = "v" + VERSION;
 
         // ---------- state ----------
@@ -1273,6 +1287,8 @@
         const ctx = canvas.getContext("2d");
         const scrub = document.getElementById("scrub");
         const tcReadout = document.getElementById("tcReadout");
+        const clipReadout = document.getElementById("clipReadout");
+        const btnUseFrame = document.getElementById("btnUseFrame");
 
         function projectFps() {
           return timeline.length ? sourceOf(timeline[0]).fps : 30;
@@ -1282,6 +1298,22 @@
           const fps = projectFps();
           const total = Math.max(1, totalFrames());
           tcReadout.textContent = `${formatTC(playhead, fps)} / ${formatTC(total - 1, fps)}`;
+
+          const hasContent = timeline.length > 0 && totalFrames() > 0;
+          if (hasContent) {
+            const loc = globalFrameToLocation(
+              clamp(playhead, 0, totalFrames() - 1),
+            );
+            if (loc) {
+              const src = sourceOf(loc.seg);
+              clipReadout.textContent = `${src ? src.name : "(missing clip)"} · source frame ${loc.sourceFrame}`;
+            } else {
+              clipReadout.textContent = "—";
+            }
+          } else {
+            clipReadout.textContent = "—";
+          }
+          btnUseFrame.disabled = !hasContent;
         }
 
         async function renderCurrentFrame() {
@@ -1309,6 +1341,31 @@
           playhead = parseInt(scrub.value, 10) || 0;
           updateTcReadout();
           renderCurrentFrame();
+        });
+
+        btnUseFrame.addEventListener("click", () => {
+          const total = totalFrames();
+          if (total === 0) return;
+          const loc = globalFrameToLocation(clamp(playhead, 0, total - 1));
+          if (!loc) return;
+          const seg = loc.seg;
+
+          // select the clip in the timeline, if it isn't already the sole selection
+          if (!(selection.length === 1 && selection[0] === seg.id)) {
+            selection = [seg.id];
+            renderTimeline();
+          }
+
+          // paste the current frame number into the split field for that segment
+          if (segLength(seg) < 2) return; // nothing valid to split
+          const splitFrame = clamp(
+            loc.sourceFrame,
+            seg.startFrame + 1,
+            seg.endFrame - 1,
+          );
+          insSplit.value = splitFrame;
+          insSplit.focus();
+          insSplit.select();
         });
 
         // Press once for a single step; press and hold to repeat at a steady rate.
