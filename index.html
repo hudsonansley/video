@@ -310,12 +310,51 @@
         color: var(--text-dim);
         margin: 0;
       }
+      #timelineCanvas {
+        position: relative;
+        display: inline-block;
+        min-width: 100%;
+      }
+      #timelineScrub {
+        height: 16px;
+        margin-bottom: 4px;
+        border-radius: var(--radius);
+        background: var(--panel-alt);
+        border: 1px solid var(--border-soft);
+        cursor: pointer;
+        min-width: 100%;
+      }
+      #timelineScrub:hover {
+        border-color: var(--text-dim);
+      }
       #timelineTrack {
         display: flex;
         align-items: stretch;
         gap: 2px;
         min-height: 64px;
         padding-bottom: 6px;
+      }
+      #timelinePlayhead {
+        position: absolute;
+        top: 0;
+        bottom: 6px;
+        width: 2px;
+        background: var(--amber);
+        pointer-events: none;
+        z-index: 5;
+        display: none;
+      }
+      #timelinePlayhead::before {
+        content: "";
+        position: absolute;
+        top: -1px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 0;
+        height: 0;
+        border-left: 5px solid transparent;
+        border-right: 5px solid transparent;
+        border-top: 6px solid var(--amber);
       }
       .seg {
         flex: 0 0 auto;
@@ -534,10 +573,17 @@
               >click to select · shift-click to extend</span
             >
           </div>
-          <div id="timelineTrack">
-            <div id="timelineEmpty">
-              Add a clip from the media pool to start a timeline.
+          <div id="timelineCanvas">
+            <div
+              id="timelineScrub"
+              title="Click or drag to scrub through the timeline"
+            ></div>
+            <div id="timelineTrack">
+              <div id="timelineEmpty">
+                Add a clip from the media pool to start a timeline.
+              </div>
             </div>
+            <div id="timelinePlayhead"></div>
           </div>
         </section>
 
@@ -619,7 +665,7 @@
       (function () {
         "use strict";
 
-        const VERSION = "1.4.0";
+        const VERSION = "1.5.0";
         document.getElementById("versionTag").textContent = "v" + VERSION;
 
         // ---------- state ----------
@@ -1009,25 +1055,116 @@
 
         // ---------- timeline rendering ----------
         const track = document.getElementById("timelineTrack");
+        const timelineScrub = document.getElementById("timelineScrub");
+        const timelinePlayhead = document.getElementById("timelinePlayhead");
         const PX_PER_FRAME = 1.4;
         const MIN_SEG_PX = 34;
+        const SEG_GAP_PX = 2; // must match #timelineTrack's CSS gap
+
+        // Single source of truth for where each segment sits in pixels, so the
+        // segment blocks, the scrub bar, and the playhead line always agree.
+        function timelineLayout() {
+          let x = 0,
+            frameAcc = 0;
+          const items = [];
+          timeline.forEach((seg, i) => {
+            const len = segLength(seg);
+            const w = Math.max(MIN_SEG_PX, len * PX_PER_FRAME);
+            items.push({ seg, x, w, frameStart: frameAcc, frameLen: len });
+            x += w + (i < timeline.length - 1 ? SEG_GAP_PX : 0);
+            frameAcc += len;
+          });
+          return { items, totalWidth: x, totalFrames: frameAcc };
+        }
+
+        function updatePlayheadMarker() {
+          const layout = timelineLayout();
+          if (layout.totalFrames === 0) {
+            timelinePlayhead.style.display = "none";
+            return;
+          }
+          timelinePlayhead.style.display = "block";
+          const g = clamp(playhead, 0, layout.totalFrames - 1);
+          let x = layout.totalWidth;
+          for (const item of layout.items) {
+            if (g < item.frameStart + item.frameLen) {
+              const frac =
+                item.frameLen > 0 ? (g - item.frameStart) / item.frameLen : 0;
+              x = item.x + frac * item.w;
+              break;
+            }
+          }
+          timelinePlayhead.style.left = x + "px";
+        }
+
+        function frameFromScrubClientX(clientX) {
+          const layout = timelineLayout();
+          if (layout.totalFrames === 0) return 0;
+          const rect = timelineScrub.getBoundingClientRect();
+          const localX = clamp(clientX - rect.left, 0, layout.totalWidth);
+          for (const item of layout.items) {
+            const isLast = item === layout.items[layout.items.length - 1];
+            if (localX <= item.x + item.w || isLast) {
+              const within = clamp(localX - item.x, 0, item.w);
+              const frac = item.w > 0 ? within / item.w : 0;
+              const frameInSeg = Math.round(frac * item.frameLen);
+              return clamp(
+                item.frameStart + frameInSeg,
+                0,
+                layout.totalFrames - 1,
+              );
+            }
+          }
+          return layout.totalFrames - 1;
+        }
+
+        let scrubbingTimeline = false;
+        function seekToClientX(clientX) {
+          if (totalFrames() === 0) return;
+          playhead = frameFromScrubClientX(clientX);
+          scrub.value = playhead;
+          updateTcReadout();
+          renderCurrentFrame();
+        }
+        timelineScrub.addEventListener("pointerdown", (e) => {
+          if (totalFrames() === 0) return;
+          scrubbingTimeline = true;
+          try {
+            timelineScrub.setPointerCapture(e.pointerId);
+          } catch (err) {}
+          seekToClientX(e.clientX);
+        });
+        timelineScrub.addEventListener("pointermove", (e) => {
+          if (!scrubbingTimeline) return;
+          seekToClientX(e.clientX);
+        });
+        const stopTimelineScrub = () => {
+          scrubbingTimeline = false;
+        };
+        timelineScrub.addEventListener("pointerup", stopTimelineScrub);
+        timelineScrub.addEventListener("pointercancel", stopTimelineScrub);
+        timelineScrub.addEventListener("pointerleave", (e) => {
+          if (e.buttons === 0) scrubbingTimeline = false;
+        });
 
         function renderTimeline() {
           track.innerHTML = "";
+          const layout = timelineLayout();
           if (timeline.length === 0) {
             const empty = document.createElement("div");
             empty.id = "timelineEmpty";
             empty.textContent =
               "Add a clip from the media pool to start a timeline.";
             track.appendChild(empty);
+            timelineScrub.style.width = "";
           } else {
-            timeline.forEach((seg) => {
+            layout.items.forEach((item) => {
+              const seg = item.seg;
               const src = sourceOf(seg);
               const div = document.createElement("div");
               div.className =
                 "seg" + (selection.includes(seg.id) ? " selected" : "");
-              const w = Math.max(MIN_SEG_PX, segLength(seg) * PX_PER_FRAME);
-              div.style.width = w + "px";
+              div.style.width = item.w + "px";
               div.innerHTML = `
           <div class="sname">${src ? escapeHtml(src.name) : "(missing)"}</div>
           <div class="srange">${seg.startFrame}–${seg.endFrame} · ${segLength(seg)}f</div>
@@ -1038,6 +1175,7 @@
               );
               track.appendChild(div);
             });
+            timelineScrub.style.width = layout.totalWidth + "px";
           }
           const total = totalFrames();
           scrub.max = Math.max(0, total - 1);
@@ -1314,6 +1452,7 @@
             clipReadout.textContent = "—";
           }
           btnUseFrame.disabled = !hasContent;
+          updatePlayheadMarker();
         }
 
         async function renderCurrentFrame() {
