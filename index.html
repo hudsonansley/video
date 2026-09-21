@@ -495,10 +495,13 @@
         position: fixed;
         inset: 0;
         background: rgba(10, 10, 11, 0.7);
-        display: flex;
         align-items: center;
         justify-content: center;
         z-index: 100;
+        display: none;
+      }
+      .modalOverlay.open {
+        display: flex;
       }
       .modalPanel {
         background: var(--panel);
@@ -695,7 +698,7 @@
       </div>
     </details>
 
-    <div id="trimOverlay" class="modalOverlay" hidden>
+    <div id="trimOverlay" class="modalOverlay">
       <div class="modalPanel">
         <h3>Long clip — choose a range to decode</h3>
         <p id="trimIntro" class="modalNote"></p>
@@ -721,7 +724,7 @@
       (function () {
         "use strict";
 
-        const VERSION = "1.6.0";
+        const VERSION = "1.6.1";
         document.getElementById("versionTag").textContent = "v" + VERSION;
 
         // ---------- state ----------
@@ -917,10 +920,10 @@
           trimStartInput.oninput = updatePreview;
           trimLengthInput.oninput = updatePreview;
 
-          trimOverlay.hidden = false;
+          trimOverlay.classList.add("open");
 
           function cleanup() {
-            trimOverlay.hidden = true;
+            trimOverlay.classList.remove("open");
             trimStartInput.oninput = null;
             trimLengthInput.oninput = null;
             trimConfirmBtn.onclick = null;
