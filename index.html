@@ -491,6 +491,40 @@
         max-width: 640px;
       }
 
+      .modalOverlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(10, 10, 11, 0.7);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 100;
+      }
+      .modalPanel {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 18px 20px;
+        width: 360px;
+        max-width: 90vw;
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+      }
+      .modalPanel h3 {
+        margin: 0 0 8px;
+        font-size: 14px;
+        font-weight: 600;
+      }
+      .modalNote {
+        font-size: 11.5px;
+        color: var(--text-dim);
+        line-height: 1.5;
+        margin: 6px 0;
+      }
+      #trimPreview {
+        font-family: var(--mono);
+        color: var(--amber);
+      }
+
       ::-webkit-scrollbar {
         width: 10px;
         height: 10px;
@@ -661,11 +695,33 @@
       </div>
     </details>
 
+    <div id="trimOverlay" class="modalOverlay" hidden>
+      <div class="modalPanel">
+        <h3>Long clip — choose a range to decode</h3>
+        <p id="trimIntro" class="modalNote"></p>
+        <div class="insGrid">
+          <label class="field"
+            >Start at (seconds)
+            <input type="number" id="trimStartInput" min="0" step="0.5" />
+          </label>
+          <label class="field"
+            >Decode length (seconds)
+            <input type="number" id="trimLengthInput" min="0.5" step="0.5" />
+          </label>
+        </div>
+        <p id="trimPreview" class="modalNote"></p>
+        <div class="btnRow" style="justify-content: flex-end">
+          <button id="trimCancelBtn" class="danger">Skip this file</button>
+          <button id="trimConfirmBtn" class="primary">Decode this range</button>
+        </div>
+      </div>
+    </div>
+
     <script>
       (function () {
         "use strict";
 
-        const VERSION = "1.5.0";
+        const VERSION = "1.6.0";
         document.getElementById("versionTag").textContent = "v" + VERSION;
 
         // ---------- state ----------
@@ -717,6 +773,8 @@
           fileInput.value = "";
         });
 
+        const LONG_CLIP_THRESHOLD = 120; // seconds — clips longer than this get a range prompt
+
         function handleFiles(fileList) {
           Array.from(fileList).forEach((file) => {
             if (!file.type.startsWith("video/")) return;
@@ -732,6 +790,8 @@
               url,
               video,
               duration: 0,
+              rawDuration: 0,
+              trimStart: 0,
               fps: 30,
               frameCount: 0,
               width: 0,
@@ -744,16 +804,36 @@
               cacheProgress: 0,
             };
             video.addEventListener("loadedmetadata", async () => {
-              source.duration = video.duration;
+              const rawDuration = video.duration;
+              source.rawDuration = rawDuration;
               source.width = video.videoWidth;
               source.height = video.videoHeight;
+
+              let trimStart = 0,
+                trimDuration = rawDuration;
+              if (rawDuration > LONG_CLIP_THRESHOLD) {
+                const choice = await askTrimRange(file.name, rawDuration);
+                if (choice === null) {
+                  // user chose to skip this file entirely
+                  try {
+                    URL.revokeObjectURL(url);
+                  } catch (e) {}
+                  video.src = "";
+                  return;
+                }
+                trimStart = choice.start;
+                trimDuration = choice.duration;
+              }
+
+              source.trimStart = trimStart;
+              source.duration = trimDuration;
               source.frameCount = Math.max(
                 1,
                 Math.round(source.duration * source.fps),
               );
               sources.push(source);
               try {
-                await seekVideo(video, 0);
+                await seekVideo(video, trimStart);
                 source.thumbCanvas = makeThumb(video);
               } catch (e) {
                 /* thumbnail is best-effort */
@@ -766,6 +846,105 @@
               console.warn("Could not load", file.name);
             });
           });
+        }
+
+        // ---------- long-clip range prompt ----------
+        // Only one prompt is shown at a time; if several long files are dropped
+        // together, they're queued and asked about one after another.
+        const trimOverlay = document.getElementById("trimOverlay");
+        const trimIntro = document.getElementById("trimIntro");
+        const trimPreview = document.getElementById("trimPreview");
+        const trimStartInput = document.getElementById("trimStartInput");
+        const trimLengthInput = document.getElementById("trimLengthInput");
+        const trimConfirmBtn = document.getElementById("trimConfirmBtn");
+        const trimCancelBtn = document.getElementById("trimCancelBtn");
+        let trimQueue = [];
+        let trimBusy = false;
+
+        function formatSeconds(s) {
+          s = Math.max(0, s);
+          const m = Math.floor(s / 60);
+          const sec = Math.floor(s % 60);
+          return `${m}:${String(sec).padStart(2, "0")}`;
+        }
+
+        function askTrimRange(name, totalDuration) {
+          return new Promise((resolve) => {
+            trimQueue.push({ name, totalDuration, resolve });
+            processTrimQueue();
+          });
+        }
+
+        function processTrimQueue() {
+          if (trimBusy || trimQueue.length === 0) return;
+          trimBusy = true;
+          const { name, totalDuration, resolve } = trimQueue.shift();
+          showTrimModal(name, totalDuration, (result) => {
+            trimBusy = false;
+            resolve(result);
+            processTrimQueue();
+          });
+        }
+
+        function showTrimModal(name, totalDuration, done) {
+          trimIntro.textContent =
+            `"${name}" is ${formatSeconds(totalDuration)} long. Clips over 2 minutes are decoded as a ` +
+            `shorter working range to keep decode time and memory reasonable — only the range below ` +
+            `will be loaded into the editor; the rest of the file is left alone.`;
+
+          const defaultLen = Math.min(LONG_CLIP_THRESHOLD, totalDuration);
+          trimStartInput.value = 0;
+          trimStartInput.min = 0;
+          trimStartInput.max = Math.max(0, totalDuration - 0.5);
+          trimLengthInput.value = defaultLen;
+          trimLengthInput.min = 0.5;
+          trimLengthInput.max = totalDuration;
+
+          function updatePreview() {
+            const s = clamp(
+              parseFloat(trimStartInput.value) || 0,
+              0,
+              Math.max(0, totalDuration - 0.5),
+            );
+            const l = clamp(
+              parseFloat(trimLengthInput.value) || 0.5,
+              0.5,
+              totalDuration - s,
+            );
+            trimPreview.textContent = `Will decode ${formatSeconds(s)}–${formatSeconds(s + l)} (${l.toFixed(1)}s of ${formatSeconds(totalDuration)} total).`;
+          }
+          updatePreview();
+          trimStartInput.oninput = updatePreview;
+          trimLengthInput.oninput = updatePreview;
+
+          trimOverlay.hidden = false;
+
+          function cleanup() {
+            trimOverlay.hidden = true;
+            trimStartInput.oninput = null;
+            trimLengthInput.oninput = null;
+            trimConfirmBtn.onclick = null;
+            trimCancelBtn.onclick = null;
+          }
+
+          trimConfirmBtn.onclick = () => {
+            const s = clamp(
+              parseFloat(trimStartInput.value) || 0,
+              0,
+              Math.max(0, totalDuration - 0.5),
+            );
+            const l = clamp(
+              parseFloat(trimLengthInput.value) || 0.5,
+              0.5,
+              totalDuration - s,
+            );
+            cleanup();
+            done({ start: s, duration: l });
+          };
+          trimCancelBtn.onclick = () => {
+            cleanup();
+            done(null);
+          };
         }
 
         function makeThumb(video) {
@@ -835,7 +1014,10 @@
           const offCtx = off.getContext("2d");
           for (let i = 0; i < source.frameCount; i++) {
             try {
-              await seekVideo(source.video, (i + 0.5) / source.fps);
+              await seekVideo(
+                source.video,
+                source.trimStart + (i + 0.5) / source.fps,
+              );
               offCtx.drawImage(source.video, 0, 0, cw, ch);
               const blob = await new Promise((res) =>
                 off.toBlob(res, "image/jpeg", 0.85),
@@ -883,7 +1065,10 @@
             }
           }
           try {
-            await seekVideo(source.video, (frameIndex + 0.5) / source.fps);
+            await seekVideo(
+              source.video,
+              source.trimStart + (frameIndex + 0.5) / source.fps,
+            );
           } catch (e) {}
           drawFitted(ctx2, source.video, cw, ch, source.width, source.height);
         }
@@ -902,11 +1087,13 @@
             if (src.thumbCanvas) thumbWrap.appendChild(src.thumbCanvas);
             card.appendChild(thumbWrap);
 
+            const wasTrimmed = src.rawDuration > src.duration + 0.01;
             const meta = document.createElement("div");
             meta.className = "meta";
             meta.innerHTML = `
         <div class="name" title="${escapeHtml(src.name)}">${escapeHtml(src.name)}</div>
         <div class="stats">${formatTC(src.frameCount - 1, src.fps)} · ${src.width}×${src.height} · ${(src.sizeBytes / 1024 / 1024).toFixed(1)} MB</div>
+        ${wasTrimmed ? `<div class="stats" style="margin-top:2px;">only ${formatSeconds(src.trimStart)}–${formatSeconds(src.trimStart + src.duration)} of ${formatSeconds(src.rawDuration)} was decoded</div>` : ""}
         <div class="stats" style="margin-top:2px;color:var(--amber);"></div>
       `;
             src._progressEl = meta.querySelector(".stats:last-child");
