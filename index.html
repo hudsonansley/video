@@ -574,17 +574,22 @@
         <section id="previewSection">
           <canvas id="previewCanvas" width="960" height="540"></canvas>
           <div class="transport">
-            <button id="btnStepBack" title="Previous frame (hold to repeat)">
+            <button
+              id="btnStepBack"
+              title="Previous frame (hold to repeat) — ←"
+            >
               ◂
             </button>
-            <button id="btnPlay" title="Play at normal speed / pause">▶</button>
+            <button id="btnPlay" title="Play at normal speed / pause — Space">
+              ▶
+            </button>
             <button
               id="btnPlayFast"
               title="Play as fast as frames can be drawn"
             >
               ▶▶
             </button>
-            <button id="btnStepFwd" title="Next frame (hold to repeat)">
+            <button id="btnStepFwd" title="Next frame (hold to repeat) — →">
               ▸
             </button>
             <input
@@ -731,7 +736,7 @@
       (function () {
         "use strict";
 
-        const VERSION = "1.8.2";
+        const VERSION = "1.9.0";
         document.getElementById("versionTag").textContent = "v" + VERSION;
 
         // ---------- state ----------
@@ -1858,6 +1863,29 @@
 
         btnPlay.addEventListener("click", () => togglePlayback(true));
         btnPlayFast.addEventListener("click", () => togglePlayback(false));
+
+        // ---------- keyboard controls ----------
+        document.addEventListener("keydown", (e) => {
+          const tag = ((e.target && e.target.tagName) || "").toLowerCase();
+          const isEditable =
+            tag === "input" ||
+            tag === "select" ||
+            tag === "textarea" ||
+            (e.target && e.target.isContentEditable);
+          if (isEditable) return;
+          if (trimOverlay.classList.contains("open")) return; // don't steal keys while the range dialog is up
+
+          if (e.key === "ArrowLeft") {
+            e.preventDefault();
+            stepFrame(-1);
+          } else if (e.key === "ArrowRight") {
+            e.preventDefault();
+            stepFrame(1);
+          } else if (e.key === " " || e.code === "Space") {
+            e.preventDefault();
+            togglePlayback(true);
+          }
+        });
 
         // ---------- export ----------
         const outRes = document.getElementById("outRes");
