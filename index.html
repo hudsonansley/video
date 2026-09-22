@@ -724,7 +724,7 @@
       (function () {
         "use strict";
 
-        const VERSION = "1.6.1";
+        const VERSION = "1.7.0";
         document.getElementById("versionTag").textContent = "v" + VERSION;
 
         // ---------- state ----------
@@ -778,6 +778,35 @@
 
         const LONG_CLIP_THRESHOLD = 120; // seconds — clips longer than this get a range prompt
 
+        // Forces the browser to determine the real duration of a file whose
+        // container doesn't declare one (reported as Infinity/NaN) — the standard
+        // trick is to seek past the end, which makes the browser scan for the
+        // actual end of the stream, after which video.duration becomes correct.
+        function resolveDurationViaSeek(video) {
+          return new Promise((resolve) => {
+            let done = false;
+            function cleanup(d) {
+              if (done) return;
+              done = true;
+              video.removeEventListener("timeupdate", onTimeUpdate);
+              resolve(d);
+            }
+            function onTimeUpdate() {
+              const d = video.duration;
+              video.currentTime = 0;
+              cleanup(isFinite(d) && d > 0 ? d : 0);
+            }
+            video.addEventListener("timeupdate", onTimeUpdate);
+            try {
+              video.currentTime = 1e101;
+            } catch (e) {
+              cleanup(0);
+              return;
+            }
+            setTimeout(() => cleanup(0), 5000); // don't hang forever on a broken file
+          });
+        }
+
         function handleFiles(fileList) {
           Array.from(fileList).forEach((file) => {
             if (!file.type.startsWith("video/")) return;
@@ -807,7 +836,24 @@
               cacheProgress: 0,
             };
             video.addEventListener("loadedmetadata", async () => {
-              const rawDuration = video.duration;
+              let rawDuration = video.duration;
+              if (!isFinite(rawDuration) || rawDuration <= 0) {
+                // Some WebM files (notably ones written by MediaRecorder, including
+                // this app's own exports before this fix) don't declare a duration
+                // in their container header, so the browser reports Infinity/NaN
+                // until it's forced to scan for the real end of the stream.
+                rawDuration = await resolveDurationViaSeek(video);
+              }
+              if (!rawDuration || rawDuration <= 0) {
+                alert(
+                  `Could not determine the length of "${file.name}" — the file may be corrupt or use an unsupported codec.`,
+                );
+                try {
+                  URL.revokeObjectURL(url);
+                } catch (e) {}
+                video.src = "";
+                return;
+              }
               source.rawDuration = rawDuration;
               source.width = video.videoWidth;
               source.height = video.videoHeight;
@@ -1824,6 +1870,143 @@
 
         btnExport.addEventListener("click", runExport);
 
+        // ---------- WebM duration repair ----------
+        // MediaRecorder's WebM output doesn't fill in the file's own declared
+        // duration, which is why a browser reports Infinity/NaN for it until it
+        // scans the whole file. Chrome does pre-reserve a fixed-size Duration slot
+        // in the container header for exactly this reason, so it can be patched in
+        // place afterwards — no bytes need to move, which keeps this safe: if the
+        // expected structure isn't found for any reason, the original file is
+        // returned untouched.
+        function ebmlReadVintLength(firstByte) {
+          if (firstByte === 0) return null;
+          let length = 1,
+            mask = 0x80;
+          while (length <= 8 && !(firstByte & mask)) {
+            mask >>= 1;
+            length++;
+          }
+          return length > 8 ? null : length;
+        }
+        function ebmlReadVint(bytes, offset, keepMarker) {
+          const first = bytes[offset];
+          const length = ebmlReadVintLength(first);
+          if (length === null) return null;
+          const payloadMask = 0xff >> length;
+          let value = keepMarker ? first : first & payloadMask;
+          let allOnes = !keepMarker && (first & payloadMask) === payloadMask;
+          for (let i = 1; i < length; i++) {
+            const b = bytes[offset + i];
+            value = value * 256 + b;
+            if (!keepMarker && b !== 0xff) allOnes = false;
+          }
+          return { value, length, isUnknown: !!allOnes };
+        }
+        function ebmlReadId(bytes, offset) {
+          const first = bytes[offset];
+          const length = ebmlReadVintLength(first);
+          if (length === null || length > 4) return null;
+          const idBytes = [];
+          for (let i = 0; i < length; i++) idBytes.push(bytes[offset + i]);
+          return { idBytes, length };
+        }
+        function ebmlIdsEqual(a, b) {
+          if (a.length !== b.length) return false;
+          for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+          return true;
+        }
+        function ebmlScanInfoForDuration(bytes, start, end) {
+          let p = start,
+            durationOffset = null,
+            durationLen = null,
+            timecodeScale = 1000000;
+          while (p < end - 1) {
+            const idInfo = ebmlReadId(bytes, p);
+            if (!idInfo) break;
+            const sizeInfo = ebmlReadVint(bytes, p + idInfo.length, false);
+            if (!sizeInfo) break;
+            const contentStart = p + idInfo.length + sizeInfo.length;
+            const contentLen = sizeInfo.isUnknown
+              ? end - contentStart
+              : Number(sizeInfo.value);
+            if (ebmlIdsEqual(idInfo.idBytes, [0x44, 0x89])) {
+              durationOffset = contentStart;
+              durationLen = contentLen;
+            } else if (ebmlIdsEqual(idInfo.idBytes, [0x2a, 0xd7, 0xb1])) {
+              let v = 0;
+              for (let i = 0; i < contentLen; i++)
+                v = v * 256 + bytes[contentStart + i];
+              timecodeScale = v || 1000000;
+            }
+            p = contentStart + contentLen;
+          }
+          return durationOffset === null
+            ? null
+            : { offset: durationOffset, length: durationLen, timecodeScale };
+        }
+        function ebmlFindDurationSlot(bytes) {
+          let pos = 0;
+          const ebmlId = ebmlReadId(bytes, 0);
+          if (
+            !ebmlId ||
+            !ebmlIdsEqual(ebmlId.idBytes, [0x1a, 0x45, 0xdf, 0xa3])
+          )
+            return null;
+          pos += ebmlId.length;
+          const ebmlSize = ebmlReadVint(bytes, pos, false);
+          if (!ebmlSize) return null;
+          pos += ebmlSize.length + Number(ebmlSize.value);
+
+          const segId = ebmlReadId(bytes, pos);
+          if (!segId || !ebmlIdsEqual(segId.idBytes, [0x18, 0x53, 0x80, 0x67]))
+            return null;
+          pos += segId.length;
+          const segSize = ebmlReadVint(bytes, pos, false);
+          if (!segSize) return null;
+          pos += segSize.length;
+          const segmentContentStart = pos;
+          const segmentEnd = segSize.isUnknown
+            ? bytes.length
+            : segmentContentStart + Number(segSize.value);
+
+          let p = segmentContentStart;
+          while (p < segmentEnd - 1) {
+            const idInfo = ebmlReadId(bytes, p);
+            if (!idInfo) break;
+            const sizeInfo = ebmlReadVint(bytes, p + idInfo.length, false);
+            if (!sizeInfo) break;
+            const childContentStart = p + idInfo.length + sizeInfo.length;
+            const childSize = sizeInfo.isUnknown
+              ? segmentEnd - childContentStart
+              : Number(sizeInfo.value);
+            if (ebmlIdsEqual(idInfo.idBytes, [0x15, 0x49, 0xa9, 0x66])) {
+              return ebmlScanInfoForDuration(
+                bytes,
+                childContentStart,
+                childContentStart + childSize,
+              );
+            }
+            p = childContentStart + childSize;
+          }
+          return null;
+        }
+        async function fixWebmDuration(blob, durationSeconds) {
+          try {
+            const buf = await blob.arrayBuffer();
+            const bytes = new Uint8Array(buf);
+            const slot = ebmlFindDurationSlot(bytes);
+            if (!slot || (slot.length !== 4 && slot.length !== 8)) return blob;
+            const durationValue = (durationSeconds * 1e9) / slot.timecodeScale;
+            const view = new DataView(buf);
+            if (slot.length === 8)
+              view.setFloat64(slot.offset, durationValue, false);
+            else view.setFloat32(slot.offset, durationValue, false);
+            return new Blob([buf], { type: blob.type });
+          } catch (e) {
+            return blob; // if anything looks unexpected, hand back the original untouched
+          }
+        }
+
         async function runExport() {
           const total = totalFrames();
           if (total === 0) {
@@ -1909,7 +2092,9 @@
           recorder.stop();
           await done;
 
-          const blob = new Blob(chunks, { type: mimeType.split(";")[0] });
+          let blob = new Blob(chunks, { type: mimeType.split(";")[0] });
+          exportStatus.textContent = "Writing duration into the file…";
+          blob = await fixWebmDuration(blob, total / fps);
           const url = URL.createObjectURL(blob);
           downloadLink.href = url;
           downloadLink.download = "localcut-export.webm";
