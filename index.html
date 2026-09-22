@@ -32,6 +32,7 @@
       html,
       body {
         height: 100%;
+        overscroll-behavior-x: none;
       }
       body {
         margin: 0;
@@ -301,6 +302,7 @@
         min-height: 120px;
         min-width: 0;
         border-bottom: 1px solid var(--border);
+        overscroll-behavior-x: contain;
       }
       #timelineSection .head {
         display: flex;
@@ -729,7 +731,7 @@
       (function () {
         "use strict";
 
-        const VERSION = "1.8.1";
+        const VERSION = "1.8.2";
         document.getElementById("versionTag").textContent = "v" + VERSION;
 
         // ---------- state ----------
