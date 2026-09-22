@@ -724,7 +724,7 @@
       (function () {
         "use strict";
 
-        const VERSION = "1.7.0";
+        const VERSION = "1.8.0";
         document.getElementById("versionTag").textContent = "v" + VERSION;
 
         // ---------- state ----------
@@ -1293,6 +1293,7 @@
         const track = document.getElementById("timelineTrack");
         const timelineScrub = document.getElementById("timelineScrub");
         const timelinePlayhead = document.getElementById("timelinePlayhead");
+        const timelineSection = document.getElementById("timelineSection");
         const PX_PER_FRAME = 1.4;
         const MIN_SEG_PX = 34;
         const SEG_GAP_PX = 2; // must match #timelineTrack's CSS gap
@@ -1313,13 +1314,9 @@
           return { items, totalWidth: x, totalFrames: frameAcc };
         }
 
-        function updatePlayheadMarker() {
-          const layout = timelineLayout();
-          if (layout.totalFrames === 0) {
-            timelinePlayhead.style.display = "none";
-            return;
-          }
-          timelinePlayhead.style.display = "block";
+        function playheadPixelX(layout) {
+          layout = layout || timelineLayout();
+          if (layout.totalFrames === 0) return 0;
           const g = clamp(playhead, 0, layout.totalFrames - 1);
           let x = layout.totalWidth;
           for (const item of layout.items) {
@@ -1330,7 +1327,30 @@
               break;
             }
           }
-          timelinePlayhead.style.left = x + "px";
+          return x;
+        }
+
+        function updatePlayheadMarker() {
+          const layout = timelineLayout();
+          if (layout.totalFrames === 0) {
+            timelinePlayhead.style.display = "none";
+            return;
+          }
+          timelinePlayhead.style.display = "block";
+          timelinePlayhead.style.left = playheadPixelX(layout) + "px";
+        }
+
+        // Keeps the playhead centered in the visible timeline viewport as it moves
+        // during playback, stepping, or the main scrub bar — clamped so it never
+        // scrolls past the start or end of the content. Scrubbing directly in the
+        // timeline (the bar above the clips) deliberately does NOT call this, so
+        // dragging there can move the marker off-center.
+        function centerTimelineOnPlayhead() {
+          if (totalFrames() === 0) return;
+          const x = playheadPixelX();
+          const viewport = timelineSection.clientWidth;
+          const maxScroll = Math.max(0, timelineSection.scrollWidth - viewport);
+          timelineSection.scrollLeft = clamp(x - viewport / 2, 0, maxScroll);
         }
 
         function frameFromScrubClientX(clientX) {
@@ -1715,6 +1735,7 @@
         scrub.addEventListener("input", () => {
           playhead = parseInt(scrub.value, 10) || 0;
           updateTcReadout();
+          centerTimelineOnPlayhead();
           renderCurrentFrame();
         });
 
@@ -1776,6 +1797,7 @@
           playhead = clamp(playhead + d, 0, total - 1);
           scrub.value = playhead;
           updateTcReadout();
+          centerTimelineOnPlayhead();
           renderCurrentFrame();
         }
 
@@ -1809,6 +1831,7 @@
               framesAdvanced++;
               scrub.value = playhead;
               updateTcReadout();
+              centerTimelineOnPlayhead();
               await renderCurrentFrame();
               if (paced) {
                 // hold to real playback speed, correcting for any drift rather
