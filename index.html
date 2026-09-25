@@ -374,8 +374,9 @@
         flex-direction: column;
         justify-content: space-between;
         padding: 5px 6px;
-        cursor: pointer;
+        cursor: grab;
         overflow: hidden;
+        touch-action: none;
       }
       .seg:hover {
         border-color: var(--text-dim);
@@ -383,6 +384,10 @@
       .seg.selected {
         border-color: var(--teal);
         background: var(--teal-dim);
+      }
+      .seg.dragging {
+        opacity: 0.35;
+        cursor: grabbing;
       }
       .seg .sname {
         font-size: 10.5px;
@@ -402,6 +407,16 @@
         right: 4px;
         font-size: 11px;
         color: var(--amber);
+      }
+      #timelineDropIndicator {
+        position: absolute;
+        top: 0;
+        bottom: 6px;
+        width: 2px;
+        background: var(--teal);
+        pointer-events: none;
+        z-index: 6;
+        display: none;
       }
       #timelineEmpty {
         color: var(--text-faint);
@@ -633,6 +648,7 @@
               </div>
             </div>
             <div id="timelinePlayhead"></div>
+            <div id="timelineDropIndicator"></div>
           </div>
         </section>
 
@@ -736,7 +752,7 @@
       (function () {
         "use strict";
 
-        const VERSION = "1.9.0";
+        const VERSION = "1.10.0";
         document.getElementById("versionTag").textContent = "v" + VERSION;
 
         // ---------- state ----------
@@ -1433,13 +1449,14 @@
               div.className =
                 "seg" + (selection.includes(seg.id) ? " selected" : "");
               div.style.width = item.w + "px";
+              div.dataset.segId = seg.id;
               div.innerHTML = `
           <div class="sname">${src ? escapeHtml(src.name) : "(missing)"}</div>
           <div class="srange">${seg.startFrame}–${seg.endFrame} · ${segLength(seg)}f</div>
           ${seg.reversed ? '<div class="rev">⇄</div>' : ""}
         `;
-              div.addEventListener("click", (e) =>
-                onSegClick(seg.id, e.shiftKey),
+              div.addEventListener("pointerdown", (e) =>
+                onSegPointerDown(e, seg.id),
               );
               track.appendChild(div);
             });
@@ -1471,6 +1488,132 @@
             }
           }
           renderTimeline();
+        }
+
+        // ---------- drag to reorder clips ----------
+        const dropIndicator = document.getElementById("timelineDropIndicator");
+        const DRAG_THRESHOLD_PX = 5;
+
+        function segEl(id) {
+          return track.querySelector(`[data-seg-id="${id}"]`);
+        }
+        function markDraggingSegs(ids, on) {
+          ids.forEach((id) => {
+            const el = segEl(id);
+            if (el) el.classList.toggle("dragging", on);
+          });
+        }
+
+        // Finds where a contiguous block of segments (draggedIds) should land given
+        // a pointer x position, ignoring the dragged segments' own current slot.
+        function computeDropTarget(clientX, draggedIds) {
+          const layout = timelineLayout();
+          const rect = track.getBoundingClientRect();
+          const localX = clamp(clientX - rect.left, 0, layout.totalWidth);
+          const draggedSet = new Set(draggedIds);
+          const others = layout.items.filter(
+            (it) => !draggedSet.has(it.seg.id),
+          );
+
+          let index = others.length;
+          let indicatorX = others.length
+            ? others[others.length - 1].x +
+              others[others.length - 1].w +
+              SEG_GAP_PX / 2
+            : 0;
+          for (let i = 0; i < others.length; i++) {
+            const it = others[i];
+            const center = it.x + it.w / 2;
+            if (localX < center) {
+              index = i;
+              indicatorX =
+                i === 0
+                  ? 0
+                  : others[i - 1].x + others[i - 1].w + SEG_GAP_PX / 2;
+              break;
+            }
+          }
+          return { index, indicatorX };
+        }
+
+        function commitReorder(draggedIds, targetIndex) {
+          const draggedSet = new Set(draggedIds);
+          const draggedSegs = timeline.filter((s) => draggedSet.has(s.id)); // preserves original order
+          const remaining = timeline.filter((s) => !draggedSet.has(s.id));
+          remaining.splice(
+            clamp(targetIndex, 0, remaining.length),
+            0,
+            ...draggedSegs,
+          );
+          timeline = remaining;
+          selection = draggedSegs.map((s) => s.id);
+          renderTimeline();
+        }
+
+        function onSegPointerDown(e, segId) {
+          if (e.button !== undefined && e.button !== 0) return; // primary button / touch only
+          const shiftKey = e.shiftKey;
+          const startX = e.clientX,
+            startY = e.clientY;
+          const pointerId = e.pointerId;
+          let dragging = false;
+          let draggedIds = null;
+          let dropIndex = null;
+
+          function onMove(ev) {
+            if (ev.pointerId !== pointerId) return;
+            if (!dragging) {
+              if (
+                Math.abs(ev.clientX - startX) < DRAG_THRESHOLD_PX &&
+                Math.abs(ev.clientY - startY) < DRAG_THRESHOLD_PX
+              )
+                return;
+              dragging = true;
+              draggedIds =
+                selection.includes(segId) && selection.length > 1
+                  ? [...selection]
+                  : [segId];
+              if (
+                draggedIds.length === 1 &&
+                selection.join() !== draggedIds.join()
+              ) {
+                selection = draggedIds;
+                renderTimeline();
+              }
+              markDraggingSegs(draggedIds, true);
+              dropIndicator.style.display = "block";
+            }
+            const target = computeDropTarget(ev.clientX, draggedIds);
+            dropIndex = target.index;
+            dropIndicator.style.left = target.indicatorX + "px";
+          }
+          function onUp(ev) {
+            if (ev.pointerId !== pointerId) return;
+            window.removeEventListener("pointermove", onMove);
+            window.removeEventListener("pointerup", onUp);
+            window.removeEventListener("pointercancel", onCancel);
+            if (dragging) {
+              markDraggingSegs(draggedIds, false);
+              dropIndicator.style.display = "none";
+              commitReorder(draggedIds, dropIndex);
+            } else {
+              onSegClick(segId, shiftKey);
+            }
+          }
+          function onCancel(ev) {
+            if (ev.pointerId !== pointerId) return;
+            window.removeEventListener("pointermove", onMove);
+            window.removeEventListener("pointerup", onUp);
+            window.removeEventListener("pointercancel", onCancel);
+            if (dragging) {
+              markDraggingSegs(draggedIds, false);
+              dropIndicator.style.display = "none";
+              renderTimeline(); // just re-render in place, no reorder
+            }
+          }
+          window.addEventListener("pointermove", onMove);
+          window.addEventListener("pointerup", onUp);
+          window.addEventListener("pointercancel", onCancel);
         }
 
         function selectedSegments() {
