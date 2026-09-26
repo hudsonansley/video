@@ -2,7 +2,10 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
     <title>LocalCut — offline frame editor</title>
     <style>
       :root {
@@ -156,6 +159,26 @@
       }
       header button#btnNewProject {
         flex: 0 0 auto;
+      }
+      .mobileOnly {
+        display: none;
+      }
+      #mediaBackdrop {
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: rgba(10, 10, 11, 0.55);
+        z-index: 39;
+      }
+      #mediaBackdrop.open {
+        display: block;
+      }
+      .closeX {
+        background: transparent;
+        border: none;
+        font-size: 16px;
+        padding: 4px 8px;
+        line-height: 1;
       }
 
       .layout {
@@ -398,6 +421,10 @@
         opacity: 0.35;
         cursor: grabbing;
       }
+      .seg.pressing {
+        opacity: 0.7;
+        border-color: var(--teal);
+      }
       .seg .sname {
         font-size: 10.5px;
         font-weight: 600;
@@ -570,10 +597,137 @@
       ::-webkit-scrollbar-track {
         background: transparent;
       }
+
+      /* ---------- responsive / mobile ---------- */
+      @media (max-width: 760px) {
+        .mobileOnly {
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+        }
+        header {
+          padding: 8px 10px;
+          gap: 8px;
+        }
+        header .note {
+          display: none;
+        }
+        header p {
+          display: none;
+        }
+        header h1 {
+          font-size: 14px;
+        }
+
+        .layout {
+          grid-template-columns: 1fr;
+        }
+
+        aside {
+          position: fixed;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          top: auto;
+          max-height: 78vh;
+          width: auto;
+          border-right: none;
+          border-top: 1px solid var(--border);
+          border-radius: 14px 14px 0 0;
+          box-shadow: 0 -12px 32px rgba(0, 0, 0, 0.55);
+          transform: translateY(105%);
+          transition: transform 0.22s ease-out;
+          z-index: 40;
+          padding-bottom: env(safe-area-inset-bottom, 0px);
+        }
+        aside.open {
+          transform: translateY(0);
+        }
+        aside .head {
+          padding: 12px 14px 8px;
+          font-size: 12px;
+        }
+
+        /* larger touch targets throughout */
+        button {
+          min-height: 40px;
+          padding: 8px 12px;
+          font-size: 13px;
+        }
+        .srcCard .row button {
+          min-height: 38px;
+        }
+        input[type="number"],
+        select {
+          min-height: 38px;
+          font-size: 16px;
+        } /* 16px avoids iOS auto-zoom on focus */
+        .transport button {
+          min-height: 44px;
+          min-width: 44px;
+        }
+        .btnRow {
+          gap: 8px;
+        }
+        .btnRow button {
+          flex: 1 1 auto;
+          min-width: 44%;
+        }
+
+        #previewSection {
+          padding: 10px 10px 6px;
+        }
+        #previewCanvas {
+          max-height: 32vh;
+        }
+        .transport {
+          gap: 8px;
+        }
+        #btnUseFrame {
+          font-size: 12px;
+        }
+
+        #timelineSection {
+          padding: 10px 10px;
+        }
+        #timelineScrub {
+          height: 22px;
+        }
+        .seg {
+          min-width: 40px;
+        }
+
+        #inspector {
+          padding: 10px 10px 14px;
+        }
+        .insGrid {
+          grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+        }
+
+        #exportBar {
+          flex-wrap: wrap;
+          padding: 10px;
+          gap: 8px;
+        }
+        #exportBar .field {
+          width: auto;
+          flex: 1 1 120px;
+        }
+        #exportBar #exportStatus {
+          min-width: 0;
+        }
+
+        details#aboutBox {
+          margin: 0 10px 10px;
+        }
+      }
     </style>
   </head>
   <body>
     <header>
+      <button id="btnToggleMedia" class="mobileOnly" title="Open media pool">
+        ☰ Media
+      </button>
       <h1>LocalCut <span id="versionTag" class="version"></span></h1>
       <p>frame-accurate video editing, entirely on this device</p>
       <div class="spacer"></div>
@@ -584,9 +738,16 @@
       </div>
     </header>
 
+    <div id="mediaBackdrop"></div>
+
     <div class="layout">
-      <aside>
-        <div class="head"><span>Media pool</span></div>
+      <aside id="mediaAside">
+        <div class="head">
+          <span>Media pool</span>
+          <button id="btnCloseMedia" class="mobileOnly closeX" title="Close">
+            ✕
+          </button>
+        </div>
         <div id="dropZone">
           Click or drop video files here<br />(mp4, webm, mov…)
         </div>
@@ -761,7 +922,7 @@
       (function () {
         "use strict";
 
-        const VERSION = "1.10.1";
+        const VERSION = "1.11.0";
         document.getElementById("versionTag").textContent = "v" + VERSION;
 
         // ---------- state ----------
@@ -795,6 +956,28 @@
         // ---------- source loading ----------
         const fileInput = document.getElementById("fileInput");
         const dropZone = document.getElementById("dropZone");
+
+        // ---------- mobile media-pool drawer ----------
+        const mediaAside = document.getElementById("mediaAside");
+        const mediaBackdrop = document.getElementById("mediaBackdrop");
+        const btnToggleMedia = document.getElementById("btnToggleMedia");
+        const btnCloseMedia = document.getElementById("btnCloseMedia");
+        function openMediaDrawer() {
+          mediaAside.classList.add("open");
+          mediaBackdrop.classList.add("open");
+        }
+        function closeMediaDrawer() {
+          mediaAside.classList.remove("open");
+          mediaBackdrop.classList.remove("open");
+        }
+        btnToggleMedia.addEventListener("click", () => {
+          mediaAside.classList.contains("open")
+            ? closeMediaDrawer()
+            : openMediaDrawer();
+        });
+        btnCloseMedia.addEventListener("click", closeMediaDrawer);
+        mediaBackdrop.addEventListener("click", closeMediaDrawer);
+
         dropZone.addEventListener("click", () => fileInput.click());
         dropZone.addEventListener("dragover", (e) => {
           e.preventDefault();
@@ -1244,6 +1427,7 @@
               renderTimeline();
               renderPool();
               refreshResOptions();
+              closeMediaDrawer(); // no-op on desktop where the drawer is never open
             });
             src._addBtn = addBtn;
             row.appendChild(addBtn);
@@ -1565,60 +1749,100 @@
           const startX = e.clientX,
             startY = e.clientY;
           const pointerId = e.pointerId;
-          let dragging = false;
+          const isTouch = e.pointerType === "touch";
+          const el = segEl(segId);
+
+          let mode = "pending"; // pending -> 'scrolling' (touch swipe) | 'dragging' (reorder)
           let draggedIds = null;
           let dropIndex = null;
+          let scrollStartLeft = timelineSection.scrollLeft;
+          let longPressTimer = null;
+
+          function beginDrag() {
+            mode = "dragging";
+            if (el) el.classList.remove("pressing");
+            draggedIds =
+              selection.includes(segId) && selection.length > 1
+                ? [...selection]
+                : [segId];
+            if (
+              draggedIds.length === 1 &&
+              selection.join() !== draggedIds.join()
+            ) {
+              selection = draggedIds;
+              renderTimeline();
+            }
+            markDraggingSegs(draggedIds, true);
+            dropIndicator.style.display = "block";
+          }
+
+          // On touch, a plain swipe should scroll the timeline like anywhere else —
+          // only a brief hold-still "picks up" a clip for reordering. On mouse,
+          // dragging starts immediately (no long-press needed).
+          if (isTouch) {
+            if (el) el.classList.add("pressing");
+            longPressTimer = setTimeout(() => {
+              if (mode === "pending") beginDrag();
+            }, 380);
+          }
 
           function onMove(ev) {
             if (ev.pointerId !== pointerId) return;
-            if (!dragging) {
+            const dx = ev.clientX - startX,
+              dy = ev.clientY - startY;
+
+            if (mode === "pending") {
               if (
-                Math.abs(ev.clientX - startX) < DRAG_THRESHOLD_PX &&
-                Math.abs(ev.clientY - startY) < DRAG_THRESHOLD_PX
+                Math.abs(dx) < DRAG_THRESHOLD_PX &&
+                Math.abs(dy) < DRAG_THRESHOLD_PX
               )
                 return;
-              dragging = true;
-              draggedIds =
-                selection.includes(segId) && selection.length > 1
-                  ? [...selection]
-                  : [segId];
-              if (
-                draggedIds.length === 1 &&
-                selection.join() !== draggedIds.join()
-              ) {
-                selection = draggedIds;
-                renderTimeline();
+              clearTimeout(longPressTimer);
+              if (el) el.classList.remove("pressing");
+              if (isTouch) {
+                mode = "scrolling";
+              } else {
+                beginDrag();
               }
-              markDraggingSegs(draggedIds, true);
-              dropIndicator.style.display = "block";
             }
-            const target = computeDropTarget(ev.clientX, draggedIds);
-            dropIndex = target.index;
-            dropIndicator.style.left = target.indicatorX + "px";
+
+            if (mode === "scrolling") {
+              ev.preventDefault();
+              timelineSection.scrollLeft = scrollStartLeft - dx;
+              return;
+            }
+            if (mode === "dragging") {
+              ev.preventDefault();
+              const target = computeDropTarget(ev.clientX, draggedIds);
+              dropIndex = target.index;
+              dropIndicator.style.left = target.indicatorX + "px";
+            }
           }
-          function onUp(ev) {
-            if (ev.pointerId !== pointerId) return;
+          function finish(committed) {
+            clearTimeout(longPressTimer);
             window.removeEventListener("pointermove", onMove);
             window.removeEventListener("pointerup", onUp);
             window.removeEventListener("pointercancel", onCancel);
-            if (dragging) {
+            if (el) el.classList.remove("pressing");
+            if (mode === "dragging") {
               markDraggingSegs(draggedIds, false);
               dropIndicator.style.display = "none";
-              commitReorder(draggedIds, dropIndex);
-            } else {
+              if (committed) commitReorder(draggedIds, dropIndex);
+              else renderTimeline();
+            }
+          }
+          function onUp(ev) {
+            if (ev.pointerId !== pointerId) return;
+            if (mode === "pending") {
+              finish(false);
               onSegClick(segId, shiftKey);
+            } else {
+              finish(true);
             }
           }
           function onCancel(ev) {
             if (ev.pointerId !== pointerId) return;
-            window.removeEventListener("pointermove", onMove);
-            window.removeEventListener("pointerup", onUp);
-            window.removeEventListener("pointercancel", onCancel);
-            if (dragging) {
-              markDraggingSegs(draggedIds, false);
-              dropIndicator.style.display = "none";
-              renderTimeline(); // just re-render in place, no reorder
-            }
+            finish(false);
           }
           window.addEventListener("pointermove", onMove);
           window.addEventListener("pointerup", onUp);
