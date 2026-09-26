@@ -163,6 +163,18 @@
       .mobileOnly {
         display: none;
       }
+      #capabilityBanner {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        background: var(--amber-dim);
+        color: var(--amber);
+        border-bottom: 1px solid var(--border);
+        padding: 8px 16px;
+        font-size: 12px;
+        line-height: 1.4;
+      }
       #mediaBackdrop {
         display: none;
         position: fixed;
@@ -756,6 +768,11 @@
       </div>
     </header>
 
+    <div id="capabilityBanner" hidden>
+      <span id="capabilityBannerText"></span>
+      <button id="btnDismissBanner" class="closeX" title="Dismiss">✕</button>
+    </div>
+
     <div id="mediaBackdrop"></div>
 
     <div class="layout">
@@ -933,7 +950,7 @@
       (function () {
         "use strict";
 
-        const VERSION = "1.12.0";
+        const VERSION = "1.13.0";
         document.getElementById("versionTag").textContent = "v" + VERSION;
 
         // ---------- state ----------
@@ -1262,12 +1279,22 @@
               resolve();
               return;
             }
-            const onSeeked = () => {
+            let settled = false;
+            const finish = () => {
+              if (settled) return;
+              settled = true;
               video.removeEventListener("seeked", onSeeked);
               resolve();
             };
+            const onSeeked = () => finish();
             video.addEventListener("seeked", onSeeked);
             video.currentTime = time;
+            // Some mobile browsers (older iOS Safari/WebKit in particular) don't
+            // reliably fire 'seeked' for every programmatic seek. Without a
+            // timeout here, one bad seek would hang the entire decode pipeline
+            // forever with no visible error — better to move on and use whatever
+            // frame is currently displayed than to stall silently.
+            setTimeout(finish, 2000);
           });
         }
 
@@ -1283,6 +1310,7 @@
         async function buildFrameCache(source) {
           source.cacheReady = false;
           source.cacheProgress = 0;
+          source.cacheStalled = false;
           source.frameCache = new Array(source.frameCount);
           const scale =
             source.width > MAX_CACHE_WIDTH ? MAX_CACHE_WIDTH / source.width : 1;
@@ -1292,6 +1320,7 @@
           off.width = cw;
           off.height = ch;
           const offCtx = off.getContext("2d");
+          const startTime = performance.now();
           for (let i = 0; i < source.frameCount; i++) {
             try {
               await seekVideo(
@@ -1307,6 +1336,16 @@
               source.frameCache[i] = null;
             }
             source.cacheProgress = i + 1;
+            // Surface a hint if decoding is clearly struggling (seen on some
+            // mobile browsers) rather than leaving the progress line looking
+            // frozen with no explanation.
+            if (
+              !source.cacheStalled &&
+              i < 5 &&
+              performance.now() - startTime > 6000
+            ) {
+              source.cacheStalled = true;
+            }
             if (i % 5 === 0 || i === source.frameCount - 1)
               updateCacheProgressUI(source);
           }
@@ -1318,7 +1357,9 @@
           if (source._progressEl) {
             source._progressEl.textContent = source.cacheReady
               ? "Ready"
-              : `Decoding frames… ${source.cacheProgress}/${source.frameCount}`;
+              : source.cacheStalled
+                ? `Decoding is unusually slow in this browser… ${source.cacheProgress}/${source.frameCount}`
+                : `Decoding frames… ${source.cacheProgress}/${source.frameCount}`;
           }
           if (source._addBtn) {
             source._addBtn.disabled = !source.cacheReady;
@@ -2489,10 +2530,26 @@
           const bitrate =
             clamp(parseInt(outBitrate.value, 10) || 4000, 200, 100000) * 1000;
 
-          let mimeType = "video/webm;codecs=vp9";
-          if (!MediaRecorder.isTypeSupported(mimeType))
-            mimeType = "video/webm;codecs=vp8";
-          if (!MediaRecorder.isTypeSupported(mimeType)) mimeType = "video/webm";
+          // Safari's MediaRecorder doesn't support WebM at all (only MP4), so try
+          // WebM first for the best compression, then fall back to MP4 so export
+          // still works there instead of throwing. If neither is supported, stop
+          // with a clear message rather than constructing a MediaRecorder with an
+          // unsupported mimeType (which throws).
+          const mimeCandidates = [
+            "video/webm;codecs=vp9",
+            "video/webm;codecs=vp8",
+            "video/webm",
+            "video/mp4",
+          ];
+          let mimeType = mimeCandidates.find((m) =>
+            MediaRecorder.isTypeSupported(m),
+          );
+          if (!mimeType) {
+            exportStatus.textContent =
+              "This browser doesn't support any video format this app can record to.";
+            return;
+          }
+          const fileExt = mimeType.startsWith("video/mp4") ? "mp4" : "webm";
 
           btnExport.disabled = true;
           progWrap.classList.add("active");
@@ -2546,11 +2603,13 @@
           await done;
 
           let blob = new Blob(chunks, { type: mimeType.split(";")[0] });
-          exportStatus.textContent = "Writing duration into the file…";
-          blob = await fixWebmDuration(blob, total / fps);
+          if (fileExt === "webm") {
+            exportStatus.textContent = "Writing duration into the file…";
+            blob = await fixWebmDuration(blob, total / fps);
+          }
           const url = URL.createObjectURL(blob);
           downloadLink.href = url;
-          downloadLink.download = "localcut-export.webm";
+          downloadLink.download = `localcut-export.${fileExt}`;
           downloadLink.click();
 
           exportStatus.textContent = `Done — ${(blob.size / 1024 / 1024).toFixed(1)} MB`;
@@ -2625,6 +2684,42 @@
         document
           .getElementById("btnNewProject")
           .addEventListener("click", newProject);
+
+        // ---------- startup capability check ----------
+        // Lets browsers with limited/no export support (notably Safari, which has
+        // no WebM recording at all) know what to expect up front, rather than the
+        // person discovering it only after finishing an edit.
+        function checkExportCapability() {
+          const banner = document.getElementById("capabilityBanner");
+          const bannerText = document.getElementById("capabilityBannerText");
+          const hasRecorder = typeof MediaRecorder !== "undefined";
+          const hasCaptureStream =
+            !!document.createElement("canvas").captureStream;
+          let mime = null;
+          if (hasRecorder && hasCaptureStream) {
+            mime = [
+              "video/webm;codecs=vp9",
+              "video/webm;codecs=vp8",
+              "video/webm",
+              "video/mp4",
+            ].find((m) => MediaRecorder.isTypeSupported(m));
+          }
+          if (!hasRecorder || !hasCaptureStream || !mime) {
+            bannerText.textContent =
+              "Export isn't supported in this browser (no video recording capability detected). Importing and editing should still work — try Chrome or Edge for export.";
+            banner.hidden = false;
+          } else if (mime.indexOf("mp4") !== -1) {
+            bannerText.textContent =
+              "This browser only supports MP4 export, not WebM — exports will be a bit larger than in Chrome/Edge, and duration metadata isn't patched for MP4 output yet. Editing works the same either way.";
+            banner.hidden = false;
+          }
+        }
+        document
+          .getElementById("btnDismissBanner")
+          .addEventListener("click", () => {
+            document.getElementById("capabilityBanner").hidden = true;
+          });
+        checkExportCapability();
 
         // ---------- init ----------
         renderTimeline();
