@@ -683,9 +683,6 @@
         .transport {
           gap: 8px;
         }
-        #btnUseFrame {
-          font-size: 12px;
-        }
 
         #timelineSection {
           padding: 10px 10px;
@@ -719,6 +716,27 @@
 
         details#aboutBox {
           margin: 0 10px 10px;
+        }
+
+        /* Preview + timeline + inspector don't reliably all fit in one fixed
+       screen height on a phone — let the page scroll vertically instead of
+       clipping whatever doesn't fit (as the fixed 100vh/overflow:hidden
+       shell used on desktop would do). */
+        html,
+        body {
+          height: auto;
+          min-height: 100%;
+          overflow-y: auto;
+          overflow-x: hidden;
+        }
+        .layout {
+          min-height: 0;
+        }
+        main {
+          min-height: 0;
+        }
+        #timelineSection {
+          flex: 0 0 auto;
         }
       }
     </style>
@@ -790,13 +808,6 @@
           </div>
           <div class="transport" style="margin-top: 6px">
             <span class="tc" id="clipReadout">—</span>
-            <div class="spacer2"></div>
-            <button
-              id="btnUseFrame"
-              title="Select this clip in the timeline and copy the current frame number into the Split at frame field"
-            >
-              Select clip &amp; use frame for split
-            </button>
           </div>
         </section>
 
@@ -922,7 +933,7 @@
       (function () {
         "use strict";
 
-        const VERSION = "1.11.0";
+        const VERSION = "1.12.0";
         document.getElementById("versionTag").textContent = "v" + VERSION;
 
         // ---------- state ----------
@@ -1601,6 +1612,7 @@
           playhead = frameFromScrubClientX(clientX);
           scrub.value = playhead;
           updateTcReadout();
+          syncSelectionAndSplitToPlayhead();
           renderCurrentFrame();
         }
         timelineScrub.addEventListener("pointerdown", (e) => {
@@ -2070,7 +2082,6 @@
         const scrub = document.getElementById("scrub");
         const tcReadout = document.getElementById("tcReadout");
         const clipReadout = document.getElementById("clipReadout");
-        const btnUseFrame = document.getElementById("btnUseFrame");
 
         function projectFps() {
           return timeline.length ? sourceOf(timeline[0]).fps : 30;
@@ -2095,8 +2106,38 @@
           } else {
             clipReadout.textContent = "—";
           }
-          btnUseFrame.disabled = !hasContent;
           updatePlayheadMarker();
+        }
+
+        // Keeps the Inspector following the playhead: whichever clip the playhead
+        // is currently over gets selected, and its Split-at-frame field is kept
+        // pointed at the current frame — so scrubbing to the right spot and
+        // hitting Split is all that's needed, no separate "use this frame" step.
+        // Only called from actual navigation (play/step/both scrub bars), never
+        // from a manual click on a clip, so pausing and tapping a different clip
+        // still works normally and isn't immediately overridden.
+        function syncSelectionAndSplitToPlayhead() {
+          if (totalFrames() === 0) return;
+          const loc = globalFrameToLocation(
+            clamp(playhead, 0, totalFrames() - 1),
+          );
+          if (!loc) return;
+          const seg = loc.seg;
+          const segChanged = !(
+            selection.length === 1 && selection[0] === seg.id
+          );
+          if (segChanged) {
+            selection = [seg.id];
+            renderTimeline(); // rebuilds highlighting and establishes field bounds for the new segment
+          }
+          if (segLength(seg) >= 2) {
+            const splitFrame = clamp(
+              loc.sourceFrame,
+              seg.startFrame + 1,
+              seg.endFrame - 1,
+            );
+            insSplit.value = splitFrame;
+          }
         }
 
         async function renderCurrentFrame() {
@@ -2124,32 +2165,8 @@
           playhead = parseInt(scrub.value, 10) || 0;
           updateTcReadout();
           centerTimelineOnPlayhead();
+          syncSelectionAndSplitToPlayhead();
           renderCurrentFrame();
-        });
-
-        btnUseFrame.addEventListener("click", () => {
-          const total = totalFrames();
-          if (total === 0) return;
-          const loc = globalFrameToLocation(clamp(playhead, 0, total - 1));
-          if (!loc) return;
-          const seg = loc.seg;
-
-          // select the clip in the timeline, if it isn't already the sole selection
-          if (!(selection.length === 1 && selection[0] === seg.id)) {
-            selection = [seg.id];
-            renderTimeline();
-          }
-
-          // paste the current frame number into the split field for that segment
-          if (segLength(seg) < 2) return; // nothing valid to split
-          const splitFrame = clamp(
-            loc.sourceFrame,
-            seg.startFrame + 1,
-            seg.endFrame - 1,
-          );
-          insSplit.value = splitFrame;
-          insSplit.focus();
-          insSplit.select();
         });
 
         // Press once for a single step; press and hold to repeat at a steady rate.
@@ -2186,6 +2203,7 @@
           scrub.value = playhead;
           updateTcReadout();
           centerTimelineOnPlayhead();
+          syncSelectionAndSplitToPlayhead();
           renderCurrentFrame();
         }
 
@@ -2220,6 +2238,7 @@
               scrub.value = playhead;
               updateTcReadout();
               centerTimelineOnPlayhead();
+              syncSelectionAndSplitToPlayhead();
               await renderCurrentFrame();
               if (paced) {
                 // hold to real playback speed, correcting for any drift rather
